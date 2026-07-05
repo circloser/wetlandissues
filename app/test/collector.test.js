@@ -9,7 +9,28 @@ import {
   parsePubDate,
   splitTitleAndSource,
   decodeHtmlEntities,
+  unwrapBingLink,
 } from "../src/collector.js";
+
+test("parseRssItems: Bing News의 News:Source 태그와 apiclick 중계 링크를 처리한다", () => {
+  const xml = `<item>
+    <title>창녕 우포늪 따오기 야생 번식 성공</title>
+    <link>http://www.bing.com/news/apiclick.aspx?ref=FexRss&amp;aid=&amp;tid=abc&amp;url=https%3a%2f%2fwww.pressian.com%2fpages%2farticles%2f123&amp;c=999&amp;mkt=ko-kr</link>
+    <pubDate>Tue, 23 Jun 2026 01:46:00 GMT</pubDate>
+    <News:Source>Pressian</News:Source>
+  </item>`;
+
+  const items = parseRssItems(xml);
+  assert.equal(items.length, 1);
+  assert.equal(items[0].link, "https://www.pressian.com/pages/articles/123");
+  assert.equal(items[0].source, "Pressian");
+  assert.equal(items[0].pubDate, "2026-06-23 01:46:00");
+});
+
+test("unwrapBingLink: 중계 주소가 아니면 원본을 그대로 반환한다", () => {
+  assert.equal(unwrapBingLink("https://example.com/news/1"), "https://example.com/news/1");
+  assert.equal(unwrapBingLink(""), "");
+});
 
 test("parseRssItems: 기본 CDATA + source 태그가 있는 아이템을 파싱한다", () => {
   const xml = `<?xml version="1.0" encoding="UTF-8"?>

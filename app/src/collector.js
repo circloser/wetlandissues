@@ -98,12 +98,13 @@ export function parseRssItems(xml) {
     const titleMatch = block.match(/<title>([\s\S]*?)<\/title>/);
     const linkMatch = block.match(/<link>([\s\S]*?)<\/link>/);
     const pubDateMatch = block.match(/<pubDate>([\s\S]*?)<\/pubDate>/);
-    const sourceMatch = block.match(/<source[^>]*>([\s\S]*?)<\/source>/);
+    // Google News는 <source>, Bing News는 <News:Source> 태그를 사용한다.
+    const sourceMatch = block.match(/<(?:News:)?[Ss]ource[^>]*>([\s\S]*?)<\/(?:News:)?[Ss]ource>/);
 
     if (!titleMatch || !linkMatch) continue;
 
     const rawTitle = extractText(titleMatch[1]);
-    const link = extractText(linkMatch[1]);
+    const link = unwrapBingLink(extractText(linkMatch[1]));
     const pubDate = pubDateMatch ? extractText(pubDateMatch[1]) : null;
     const sourceFromTag = sourceMatch ? extractText(sourceMatch[1]) : null;
 
@@ -131,6 +132,64 @@ export function buildNewsRssUrl(wetlandName) {
 }
 
 /**
+ * 습지명으로 Bing News RSS 검색 URL을 생성한다.
+ * Google News가 Cloudflare Workers 등 데이터센터 IP를 차단(503)하는 경우의 대체 소스.
+ * @param {string} wetlandName
+ * @returns {string}
+ */
+export function buildBingRssUrl(wetlandName) {
+  const query = encodeURIComponent(`"${wetlandName}"`);
+  return `https://www.bing.com/news/search?q=${query}&format=RSS&setmkt=ko-KR`;
+}
+
+/**
+ * Bing News RSS의 link는 bing.com/news/apiclick 중계 주소이므로,
+ * url= 파라미터에 인코딩된 실제 기사 주소를 꺼내 반환한다.
+ * 중계 주소가 아니거나 해석에 실패하면 원본을 그대로 반환한다.
+ * @param {string} link
+ * @returns {string}
+ */
+export function unwrapBingLink(link) {
+  if (!link || !link.includes("bing.com/news/apiclick")) return link;
+  const match = link.match(/[?&]url=([^&]+)/);
+  if (!match) return link;
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return link;
+  }
+}
+
+/** RSS 소스 우선순위: Google News 먼저, 실패 시 Bing News. */
+const FEED_URL_BUILDERS = [buildNewsRssUrl, buildBingRssUrl];
+
+/**
+ * 우선순위에 따라 RSS를 가져온다. 앞선 소스가 실패하면 다음 소스를 시도하고,
+ * 전부 실패하면 마지막 오류를 던진다.
+ * @param {string} wetlandName
+ * @returns {Promise<string>} RSS XML
+ */
+async function fetchRssXml(wetlandName) {
+  let lastError = null;
+
+  for (const buildUrl of FEED_URL_BUILDERS) {
+    try {
+      const res = await fetch(buildUrl(wetlandName), {
+        headers: { "User-Agent": "Mozilla/5.0 (compatible; WetlandIssuesMapper/1.0)" },
+      });
+      if (!res.ok) {
+        throw new Error(`RSS fetch 실패 (status=${res.status}): ${wetlandName}`);
+      }
+      return await res.text();
+    } catch (err) {
+      lastError = err;
+    }
+  }
+
+  throw lastError;
+}
+
+/**
  * 습지 하나에 대해 뉴스를 수집하여 D1에 저장한다.
  * 실패해도 예외를 던지지 않고 0건으로 처리한다 (호출부에서 습지 단위 격리).
  * @param {*} env - Worker 환경 (DB 바인딩 포함)
@@ -138,16 +197,7 @@ export function buildNewsRssUrl(wetlandName) {
  * @returns {Promise<number>} 신규 저장된 건수
  */
 async function collectForWetland(env, wetland) {
-  const url = buildNewsRssUrl(wetland.name);
-  const res = await fetch(url, {
-    headers: { "User-Agent": "Mozilla/5.0 (compatible; WetlandIssuesMapper/1.0)" },
-  });
-
-  if (!res.ok) {
-    throw new Error(`RSS fetch 실패 (status=${res.status}): ${wetland.name}`);
-  }
-
-  const xml = await res.text();
+  const xml = await fetchRssXml(wetland.name);
   const items = parseRssItems(xml).slice(0, RSS_ITEM_LIMIT_PER_WETLAND);
 
   let savedCount = 0;
