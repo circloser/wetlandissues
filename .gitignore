@@ -1,0 +1,14 @@
+# 의존성 (npm install로 다시 받을 수 있음)
+node_modules/
+
+# 로컬 개발용 데이터베이스·캐시 (내 컴퓨터 전용)
+app/.wrangler/
+
+# 세션 상태 파일 (작업 도구 내부용)
+**/.omc/state/
+**/.omc/sessions/
+**/.omc/logs/
+.omc/project-memory.json
+
+# 로컬 편집기/도구 설정
+.claude/

@@ -1,0 +1,33 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  // 습지 이슈 맵퍼 Cloudflare Worker 설정
+  "name": "wetland-issues-mapper",
+  "main": "src/index.js",
+  "compatibility_date": "2026-07-05",
+
+  // 정적 프론트엔드 (public/) — ASSETS 바인딩으로 fetch 핸들러에서 폴백 처리
+  "assets": {
+    "directory": "public",
+    "binding": "ASSETS"
+  },
+
+  // D1 데이터베이스 바인딩 — 습지/뉴스 이슈 저장
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "wetland-db",
+      // 로컬 개발 전용 임시 플레이스홀더. 실제 배포 전에는
+      // `npx wrangler d1 create wetland-db` 로 생성한 실제 database_id로 교체할 것.
+      "database_id": "local-placeholder"
+    }
+  ],
+
+  // 매일 UTC 21시(KST 다음날 아침 6시)에 뉴스 스크랩 배치 실행 (US-002에서 구현)
+  "triggers": {
+    "crons": ["0 21 * * *"]
+  },
+
+  "observability": {
+    "enabled": true
+  }
+}
