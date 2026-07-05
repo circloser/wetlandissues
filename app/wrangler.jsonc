@@ -16,9 +16,7 @@
     {
       "binding": "DB",
       "database_name": "wetland-db",
-      // 로컬 개발 전용 임시 플레이스홀더. 실제 배포 전에는
-      // `npx wrangler d1 create wetland-db` 로 생성한 실제 database_id로 교체할 것.
-      "database_id": "local-placeholder"
+      "database_id": "94f8dd1e-73ff-45a3-b237-8ea6089db9c8"
     }
   ],
 
