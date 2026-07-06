@@ -20,7 +20,24 @@
     }
   ],
 
-  // 매일 UTC 21시(KST 다음날 아침 6시)에 뉴스 스크랩 배치 실행 (US-002에서 구현)
+  // 배치 수집 체인이 scheduled(cron) 실행에서 self를 호출할 때 쓰는 배포 주소.
+  // fetch 핸들러에서는 요청 url.origin을 우선 쓰고(로컬 dev에서도 체인 동작),
+  // request가 없는 scheduled에서만 이 값을 사용한다.
+  "vars": {
+    "SELF_URL": "https://wetland-issues-mapper.singlena.workers.dev"
+  },
+
+  // 자기 자신 서비스 바인딩: 배포된 Worker는 자기 hostname으로 fetch할 수 없으므로
+  // (Cloudflare 제약) 배치 체인의 다음 고리 호출은 이 바인딩을 통해 이뤄진다.
+  "services": [
+    {
+      "binding": "SELF",
+      "service": "wetland-issues-mapper"
+    }
+  ],
+
+  // 매일 UTC 21시(KST 다음날 아침 6시)에 뉴스 수집 체인을 시작한다.
+  // 하루 1회 시작으로 배치 체인이 전체 습지(2,986곳)를 순회하기에 충분하다.
   "triggers": {
     "crons": ["0 21 * * *"]
   },

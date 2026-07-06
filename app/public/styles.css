@@ -368,7 +368,7 @@ button, input {
 }
 
 /* ------------------------------------------------------------------ */
-/* 본문 레이아웃                                                        */
+/* 본문 레이아웃 — 분할 뷰 (데스크톱: 좌 지도 + 우 뉴스 패널, 드래그 가능)   */
 /* ------------------------------------------------------------------ */
 
 .app-main {
@@ -377,6 +377,50 @@ button, input {
   left: 0;
   right: 0;
   bottom: 0;
+  display: flex;
+  align-items: stretch;
+}
+
+.map-pane {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 40%;
+  height: 100%;
+}
+
+.map-pane #map {
+  width: 100%;
+  height: 100%;
+}
+
+/* 드래그 가능한 분할선 */
+.split-handle {
+  flex: 0 0 6px;
+  width: 6px;
+  height: 100%;
+  background: var(--color-border);
+  cursor: col-resize;
+  position: relative;
+  z-index: 950;
+  transition: background 0.15s var(--ease-toss);
+}
+
+.split-handle::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -4px;
+  right: -4px;
+}
+
+.split-handle:hover,
+.split-handle--dragging {
+  background: var(--color-primary);
+}
+
+.split-handle[hidden] {
+  display: none;
 }
 
 /* ------------------------------------------------------------------ */
@@ -428,54 +472,173 @@ button, input {
 }
 
 /* ------------------------------------------------------------------ */
-/* 사이드 패널 (데스크톱: 우측 고정 패널 / 모바일: 하단 시트로 전환)        */
+/* 습지명 라벨(툴팁) — issue_count>0이면 permanent:true로 상시 노출          */
+/* ------------------------------------------------------------------ */
+
+.leaflet-tooltip.wetland-label {
+  padding: 2px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.88);
+  color: var(--color-text);
+  font-size: 0.7rem;
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.18);
+  text-shadow: none;
+  white-space: nowrap;
+}
+
+.leaflet-tooltip.wetland-label::before {
+  display: none; /* Leaflet 기본 툴팁 화살표 제거 — 배지형 라벨에는 불필요 */
+}
+
+/* ------------------------------------------------------------------ */
+/* 마커 클러스터 배지 — 하위 습지 issue_count 합계 표시                      */
+/* ------------------------------------------------------------------ */
+
+.wetland-cluster {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  background: var(--color-primary);
+  color: #ffffff;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  border: 3px solid rgba(255, 255, 255, 0.9);
+  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.3), 0 0 0 1px rgba(49, 130, 246, 0.18);
+  transition: transform 0.15s var(--ease-toss);
+}
+
+.wetland-cluster:hover {
+  transform: scale(1.06);
+}
+
+.wetland-cluster--sm {
+  font-size: 0.82rem;
+}
+
+.wetland-cluster--md {
+  font-size: 0.92rem;
+  background: var(--color-primary-strong);
+}
+
+.wetland-cluster--lg {
+  font-size: 1.05rem;
+  background: #123a8f;
+  box-shadow: 0 3px 12px rgba(15, 23, 42, 0.36), 0 0 0 1px rgba(49, 130, 246, 0.24);
+}
+
+.wetland-cluster.wetland-cluster--empty {
+  background: #9aa4b2;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.22);
+}
+
+/* ------------------------------------------------------------------ */
+/* 지도 레이어 선택 컨트롤(일반/위성) — 좌상단 펼쳐진 라디오, 토스풍 카드       */
+/* ------------------------------------------------------------------ */
+
+.leaflet-control-layers {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  background: var(--color-surface);
+  padding: 6px 10px;
+}
+
+.leaflet-control-layers-list label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 2px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--color-text-sub);
+}
+
+.leaflet-control-layers-selector {
+  accent-color: var(--color-primary);
+}
+
+/* ------------------------------------------------------------------ */
+/* 뉴스 패널 (데스크톱: 우측 상시 분할 패널 / 모바일: 하단 시트로 전환)     */
 /* ------------------------------------------------------------------ */
 
 .side-panel {
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  width: 380px;
-  max-width: 90vw;
+  position: relative;
+  flex: 0 0 34%;
+  min-width: 20%;
+  max-width: 80%;
+  height: 100%;
   background: var(--color-surface);
   border-left: 1px solid var(--color-border);
   box-shadow: var(--shadow-lg);
   z-index: 900;
-  overflow-y: auto;
-  animation: panel-slide-in 0.24s var(--ease-toss);
-}
-
-@keyframes panel-slide-in {
-  from {
-    transform: translateX(24px);
-    opacity: 0;
-  }
-  to {
-    transform: translateX(0);
-    opacity: 1;
-  }
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .side-panel-handle {
   display: none;
 }
 
+.panel-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 16px 16px 0 20px;
+  flex-shrink: 0;
+}
+
+.panel-title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  color: var(--color-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.panel-show-all-btn {
+  flex-shrink: 0;
+  padding: 6px 12px;
+  min-height: 30px;
+  border: 1.5px solid var(--color-primary-border);
+  border-radius: 6px;
+  background: var(--color-primary-soft);
+  color: var(--color-primary-strong);
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s var(--ease-toss);
+}
+
+.panel-show-all-btn:hover {
+  background: var(--color-primary-soft-hover);
+}
+
+.panel-show-all-btn[hidden] {
+  display: none;
+}
+
 .panel-close-btn {
-  position: sticky;
-  top: 0;
-  float: right;
-  margin: 10px 10px 0 0;
-  width: 36px;
-  height: 36px;
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
   border: none;
   border-radius: 50%;
   background: var(--color-surface-sub);
   color: var(--color-text-sub);
-  font-size: 1.2rem;
+  font-size: 1.15rem;
   line-height: 1;
   cursor: pointer;
-  z-index: 1;
   transition: background 0.15s var(--ease-toss);
 }
 
@@ -483,30 +646,66 @@ button, input {
   background: var(--color-border);
 }
 
-.panel-content {
-  padding: 18px 22px 28px;
-  clear: both;
+/* 데스크톱에서는 패널이 상시 노출이므로 닫기 버튼 대신 [전체 보기]를 사용한다. */
+.panel-close-btn {
+  display: none;
 }
 
-.panel-title {
-  margin: 0 0 4px;
-  font-size: 1.35rem;
-  font-weight: 800;
-  letter-spacing: -0.01em;
-  color: var(--color-text);
+.panel-sort-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--color-border);
 }
 
-.panel-meta {
-  margin: 0 0 20px;
-  font-size: 0.85rem;
+.issue-sort-label {
+  font-size: 0.78rem;
   color: var(--color-text-muted);
+  font-weight: 600;
 }
 
-.panel-section-title {
-  margin: 0 0 10px;
-  font-size: 0.95rem;
-  font-weight: 700;
-  color: #333d4b;
+.issue-sort-select {
+  flex: 1;
+  padding: 7px 8px;
+  min-height: 34px;
+  border: 1.5px solid var(--color-border-strong);
+  border-radius: 6px;
+  font-size: 0.8rem;
+  color: var(--color-text);
+  background: var(--color-surface);
+}
+
+.issue-sort-select:focus {
+  outline: none;
+  border-color: var(--color-primary);
+}
+
+.panel-content {
+  padding: 14px 20px 28px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+/* 전체 목록 모드에서 각 뉴스 항목에 붙는 습지명 뱃지 (클릭 시 해당 습지로 이동) */
+.issue-wetland-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--color-surface-sub);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-sub);
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s var(--ease-toss);
+}
+
+.issue-wetland-badge:hover {
+  background: var(--color-primary-soft);
+  color: var(--color-primary-strong);
+  border-color: var(--color-primary-border);
 }
 
 .issue-list {
@@ -746,10 +945,22 @@ button, input {
 
   .app-main {
     top: var(--header-height);
+    display: block; /* 모바일에서는 분할 뷰(flex) 대신 지도 위에 겹치는 하단 시트로 전환 */
   }
 
-  /* 사이드 패널 -> 하단 시트로 전환 */
+  .map-pane {
+    width: 100%;
+    height: 100%;
+  }
+
+  /* 데스크톱 전용 분할선은 모바일에서 숨김(드래그 비활성) */
+  .split-handle {
+    display: none;
+  }
+
+  /* 사이드 패널 -> 하단 시트로 전환 (습지 선택 전에는 숨김) */
   .side-panel {
+    position: absolute;
     top: auto;
     left: 0;
     right: 0;
@@ -764,6 +975,20 @@ button, input {
     border-radius: var(--radius-lg) var(--radius-lg) 0 0;
     box-shadow: 0 -8px 28px rgba(15, 23, 42, 0.18);
     animation: sheet-slide-up 0.26s var(--ease-toss);
+  }
+
+  .side-panel[hidden] {
+    display: none;
+  }
+
+  /* 모바일에서는 상시 노출 패널이 아니라 오버레이 시트이므로 닫기 버튼을 다시 노출 */
+  .panel-close-btn {
+    display: block;
+  }
+
+  .panel-show-all-btn {
+    font-size: 0.72rem;
+    padding: 5px 10px;
   }
 
   @keyframes sheet-slide-up {

@@ -1,18 +1,25 @@
 -- 습지 이슈 맵퍼 D1 스키마
+-- 주의: 이 파일을 실행하면 기존 테이블과 데이터가 초기화됩니다 (시드 재적용 전제).
 
--- 습지(습지보호지역/람사르 등록 습지) 마스터 테이블
-CREATE TABLE IF NOT EXISTS wetlands (
-  id INTEGER PRIMARY KEY,
+DROP TABLE IF EXISTS news_issues;
+DROP TABLE IF EXISTS wetlands;
+
+-- 습지 마스터 테이블 (내륙습지 목록 2,986개소 + 보호지역 지정 정보)
+-- priority: 1 = 습지보호지역(뉴스 수집 우선), 0 = 일반
+CREATE TABLE wetlands (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
   lat REAL NOT NULL,
   lng REAL NOT NULL,
   region TEXT,
-  designation TEXT
+  designation TEXT,
+  type TEXT,
+  priority INTEGER NOT NULL DEFAULT 0
 );
 
 -- 습지별 뉴스 이슈 테이블 (뉴스 본문은 저장하지 않고 링크만 보관 — 저작권)
 -- status: 'unreviewed' | 'confirmed' | 'hidden'
-CREATE TABLE IF NOT EXISTS news_issues (
+CREATE TABLE news_issues (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   wetland_id INTEGER REFERENCES wetlands(id),
   title TEXT NOT NULL,
@@ -23,6 +30,21 @@ CREATE TABLE IF NOT EXISTS news_issues (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_news_issues_wetland_id ON news_issues(wetland_id);
-CREATE INDEX IF NOT EXISTS idx_news_issues_published_at ON news_issues(published_at);
-CREATE INDEX IF NOT EXISTS idx_news_issues_status ON news_issues(status);
+CREATE INDEX idx_news_issues_wetland_id ON news_issues(wetland_id);
+CREATE INDEX idx_news_issues_published_at ON news_issues(published_at);
+CREATE INDEX idx_news_issues_status ON news_issues(status);
+CREATE INDEX idx_wetlands_priority ON wetlands(priority);
+
+-- 뉴스 수집 진행 상태 (배치 수집 커서/진행률 — 항상 1행만 사용)
+DROP TABLE IF EXISTS collect_state;
+CREATE TABLE collect_state (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  cursor_pos INTEGER NOT NULL DEFAULT 0,
+  running INTEGER NOT NULL DEFAULT 0,
+  processed INTEGER NOT NULL DEFAULT 0,
+  total INTEGER NOT NULL DEFAULT 0,
+  collected INTEGER NOT NULL DEFAULT 0,
+  started_at TEXT,
+  updated_at TEXT
+);
+INSERT INTO collect_state (id) VALUES (1);

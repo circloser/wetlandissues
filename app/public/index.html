@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>습지 이슈 맵</title>
   <link rel="stylesheet" href="/vendor/leaflet/leaflet.css" />
+  <link rel="stylesheet" href="/vendor/leaflet.markercluster/MarkerCluster.css" />
+  <link rel="stylesheet" href="/vendor/leaflet.markercluster/MarkerCluster.Default.css" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
@@ -56,18 +58,36 @@
   <div id="date-filter-status" class="date-filter-status" hidden role="status"></div>
 
   <main class="app-main">
-    <div id="map"></div>
+    <div id="map-pane" class="map-pane">
+      <div id="map"></div>
+    </div>
 
-    <aside id="side-panel" class="side-panel" hidden role="dialog" aria-label="습지 상세 정보">
+    <div id="split-handle" class="split-handle" role="separator" aria-orientation="vertical" aria-label="지도·뉴스 패널 크기 조절" tabindex="0"></div>
+
+    <aside id="side-panel" class="side-panel" role="dialog" aria-label="뉴스 패널">
       <div class="side-panel-handle" aria-hidden="true"></div>
-      <button id="panel-close-btn" class="panel-close-btn" type="button" aria-label="닫기">&times;</button>
+      <div class="panel-header">
+        <h2 id="panel-title" class="panel-title">전체 최신 뉴스</h2>
+        <button id="panel-show-all-btn" class="panel-show-all-btn" type="button" hidden>전체 보기</button>
+        <button id="panel-close-btn" class="panel-close-btn" type="button" aria-label="닫기">&times;</button>
+      </div>
+      <div class="panel-sort-row">
+        <label for="issue-sort-select" class="issue-sort-label">정렬</label>
+        <select id="issue-sort-select" class="issue-sort-select" aria-label="뉴스 정렬 기준">
+          <option value="newest">최신순</option>
+          <option value="oldest">오래된순</option>
+          <option value="wetland">습지명순</option>
+          <option value="status">미점검 먼저</option>
+        </select>
+      </div>
       <div id="panel-content" class="panel-content">
-        <!-- 습지 클릭 시 JS로 채워짐 -->
+        <!-- 뉴스 목록이 JS로 채워짐 -->
       </div>
     </aside>
   </main>
 
   <script src="/vendor/leaflet/leaflet.js"></script>
+  <script src="/vendor/leaflet.markercluster/leaflet.markercluster.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

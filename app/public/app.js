@@ -27,38 +27,160 @@ const markerByWetlandId = new Map();
 let wetlandListCache = [];
 let currentWetland = null;
 
+/** 뉴스 패널 모드: "all"(전체 최신 뉴스) 또는 "wetland"(선택한 습지만). */
+let viewMode = "all";
+
+/** 뉴스 정렬 기준. newest(기본) | oldest | wetland | status. */
+let currentSort = "newest";
+
+const MOBILE_BREAKPOINT_PX = 480;
+
+/** 화면 폭이 모바일 하단 시트 기준(~480px)인지 여부. */
+function isMobileViewport() {
+  return window.innerWidth <= MOBILE_BREAKPOINT_PX;
+}
+
 /** 날짜 기간 필터 전역 상태. from/to는 "YYYY-MM-DD" 또는 null. */
 const filterState = {
   from: null,
   to: null,
 };
 
+/* ------------------------------------------------------------------ */
+/* 분할선 드래그 (데스크톱: 지도/뉴스 패널 비율 조절)                        */
+/* ------------------------------------------------------------------ */
+
+const SPLIT_RATIO_STORAGE_KEY = "wetland-map-split-ratio";
+const SPLIT_MIN_MAP_RATIO = 0.4;
+const SPLIT_MAX_MAP_RATIO = 0.8; // 패널 최소 20% 보장
+const DEFAULT_MAP_RATIO = 0.66;
+
+let splitDragging = false;
+
 const SEARCH_DEBOUNCE_MS = 150;
 const SEARCH_MAX_RESULTS = 8;
 let searchDebounceTimer = null;
 let searchResultItems = [];
+
+/** 뉴스 수집 진행률 폴링 간격(ms). */
+const COLLECT_POLL_MS = 3000;
+/** 수집 상태 폴링 타이머 핸들(중복 폴링 방지). */
+let collectPollTimer = null;
+
+/* ------------------------------------------------------------------ */
+/* 지도 레이어 (일반/위성) 및 마커 클러스터링 관련 상수                        */
+/* ------------------------------------------------------------------ */
+
+/** 선택한 지도 종류(base layer)를 저장하는 localStorage 키. */
+const MAP_LAYER_STORAGE_KEY = "wetland-map-base-layer";
+
+/** 클러스터를 풀고 개별 마커를 보여줄 최소 줌 레벨(습지 검색 선택 시 이 값 이상으로 flyTo). */
+const CLUSTER_DISABLE_ZOOM = 12;
 
 init();
 
 function init() {
   map = L.map("map").setView([36.3, 127.8], 7);
 
-  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    maxZoom: 19,
-    attribution:
-      '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors',
-  }).addTo(map);
+  initBaseLayers();
 
-  markersLayer = L.layerGroup().addTo(map);
+  markersLayer = L.markerClusterGroup({
+    chunkedLoading: true,
+    maxClusterRadius: 50,
+    spiderfyOnMaxZoom: true,
+    disableClusteringAtZoom: CLUSTER_DISABLE_ZOOM,
+    iconCreateFunction: buildClusterIcon,
+  }).addTo(map);
 
   loadWetlands();
 
   document.getElementById("panel-close-btn").addEventListener("click", closePanel);
+  document.getElementById("panel-show-all-btn").addEventListener("click", showAllIssuesPanel);
+  document.getElementById("issue-sort-select").addEventListener("change", onSortChange);
   document.getElementById("collect-btn").addEventListener("click", onCollectClick);
 
   initWetlandSearch();
   initDateFilter();
   initDateFilterToggle();
+  initSplitHandle();
+
+  // 모바일에서는 습지를 선택하기 전까지 하단 시트를 숨겨둔다(데스크톱은 상시 노출).
+  if (isMobileViewport()) {
+    document.getElementById("side-panel").hidden = true;
+  } else {
+    loadIssues();
+  }
+
+  // 페이지 로드 시 이미 수집 중이면(다른 직원이 돌리는 중이면) 자동으로 폴링 모드에 진입한다.
+  resumeCollectionIfRunning();
+}
+
+/**
+ * 일반 지도(OSM)/위성 지도(Esri World Imagery) 두 종류의 베이스 레이어를 만들고
+ * 좌상단에 펼쳐진 라디오 형태의 레이어 컨트롤을 추가한다. 마지막으로 선택한 종류는
+ * localStorage에 저장해 새로고침 후에도 유지한다.
+ */
+function initBaseLayers() {
+  const osmLayer = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19,
+    attribution:
+      '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors',
+  });
+
+  const satelliteLayer = L.tileLayer(
+    "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+    {
+      maxZoom: 19,
+      attribution: "Tiles &copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics",
+    }
+  );
+
+  const baseLayers = {
+    "일반 지도": osmLayer,
+    "위성 지도": satelliteLayer,
+  };
+
+  const storedLayerName = localStorage.getItem(MAP_LAYER_STORAGE_KEY);
+  const initialLayer = storedLayerName === "위성 지도" ? satelliteLayer : osmLayer;
+  initialLayer.addTo(map);
+
+  L.control
+    .layers(baseLayers, null, { position: "topleft", collapsed: false })
+    .addTo(map);
+
+  map.on("baselayerchange", (event) => {
+    localStorage.setItem(MAP_LAYER_STORAGE_KEY, event.name);
+  });
+}
+
+/**
+ * 마커 클러스터 배지 아이콘을 생성한다. 하위 마커들의 issue_count 합계를 배지에 표시하고,
+ * 합계가 0이면 회색, 0보다 크면 파랑 계열로 개별 마커 색 체계와 통일한다.
+ * @param {L.MarkerCluster} cluster
+ * @returns {L.DivIcon}
+ */
+function buildClusterIcon(cluster) {
+  const childMarkers = cluster.getAllChildMarkers();
+  const totalIssues = childMarkers.reduce((sum, marker) => sum + (marker.options.issueCount || 0), 0);
+
+  let sizeClass = "wetland-cluster--sm";
+  let size = 36;
+  if (totalIssues >= 50) {
+    sizeClass = "wetland-cluster--lg";
+    size = 52;
+  } else if (totalIssues >= 10) {
+    sizeClass = "wetland-cluster--md";
+    size = 44;
+  }
+
+  const emptyClass = totalIssues === 0 ? " wetland-cluster--empty" : "";
+
+  return L.divIcon({
+    className: "",
+    html: `<div class="wetland-cluster ${sizeClass}${emptyClass}">${totalIssues}</div>`,
+    iconSize: [size, size],
+    iconAnchor: [size / 2, size / 2],
+  });
 }
 
 /**
@@ -99,8 +221,17 @@ function renderMarkers(wetlands) {
   markerByWetlandId.clear();
 
   for (const wetland of wetlands) {
+    const issueCount = Number(wetland.issue_count) || 0;
     const marker = L.marker([wetland.lat, wetland.lng], {
-      icon: buildWetlandIcon(wetland.issue_count),
+      icon: buildWetlandIcon(issueCount),
+      issueCount, // 클러스터 배지 합산용(buildClusterIcon에서 getAllChildMarkers로 합산)
+    });
+
+    marker.bindTooltip(wetland.name, {
+      permanent: issueCount > 0,
+      direction: "bottom",
+      offset: [0, 4],
+      className: "wetland-label",
     });
 
     marker.on("click", () => openPanel(wetland));
@@ -148,26 +279,74 @@ function buildWetlandIcon(issueCount) {
 }
 
 /**
- * 습지 클릭 시 사이드 패널을 열고 습지 정보 + 뉴스 목록을 표시한다.
+ * 습지 클릭(또는 검색 선택) 시 뉴스 패널을 해당 습지 모드로 전환하고 목록을 불러온다.
  * @param {object} wetland
  */
 async function openPanel(wetland) {
   currentWetland = wetland;
-  const panel = document.getElementById("side-panel");
+  viewMode = "wetland";
+
+  if (isMobileViewport()) {
+    document.getElementById("side-panel").hidden = false;
+  }
+
+  updatePanelHeader();
+  await loadIssues();
+}
+
+/**
+ * [전체 보기] 버튼 클릭 핸들러: 전체 최신 뉴스 모드로 되돌아간다.
+ */
+async function showAllIssuesPanel() {
+  viewMode = "all";
+  currentWetland = null;
+  updatePanelHeader();
+  await loadIssues();
+}
+
+/**
+ * 정렬 select 변경 핸들러: 즉시 현재 모드로 목록을 재조회한다.
+ */
+async function onSortChange() {
+  const select = document.getElementById("issue-sort-select");
+  currentSort = select.value;
+  await loadIssues();
+}
+
+/**
+ * 패널 헤더(제목 + [전체 보기] 버튼 표시 여부)를 현재 viewMode에 맞게 갱신한다.
+ */
+function updatePanelHeader() {
+  const titleEl = document.getElementById("panel-title");
+  const showAllBtn = document.getElementById("panel-show-all-btn");
+
+  if (viewMode === "wetland" && currentWetland) {
+    titleEl.textContent = currentWetland.name;
+    showAllBtn.hidden = false;
+  } else {
+    titleEl.textContent = "전체 최신 뉴스";
+    showAllBtn.hidden = true;
+  }
+}
+
+/**
+ * 현재 viewMode/currentSort/filterState에 맞춰 GET /api/issues를 호출하고 패널에 렌더링한다.
+ * "wetland" 모드면 wetland_id를 붙이고, "all" 모드면 붙이지 않는다(전체 조회).
+ */
+async function loadIssues() {
   const content = document.getElementById("panel-content");
+  content.innerHTML = `<div class="panel-loading">뉴스를 불러오는 중...</div>`;
 
-  panel.hidden = false;
-
-  content.innerHTML = `
-    <h2 class="panel-title">${escapeHtml(wetland.name)}</h2>
-    <p class="panel-meta">${escapeHtml(wetland.region || "-")} · ${escapeHtml(wetland.designation || "-")}</p>
-    <h3 class="panel-section-title">관련 뉴스</h3>
-    <div class="panel-loading">뉴스를 불러오는 중...</div>
-  `;
+  const params = new URLSearchParams();
+  if (viewMode === "wetland" && currentWetland) {
+    params.set("wetland_id", currentWetland.id);
+  }
+  params.set("sort", currentSort);
+  if (filterState.from) params.set("from", filterState.from);
+  if (filterState.to) params.set("to", filterState.to);
 
   try {
-    const url = `/api/issues?wetland_id=${encodeURIComponent(wetland.id)}${buildDateRangeQuery("&")}`;
-    const res = await fetch(url);
+    const res = await fetch(`/api/issues?${params.toString()}`);
     const issues = await res.json();
     renderIssueList(content, issues);
   } catch (err) {
@@ -177,7 +356,7 @@ async function openPanel(wetland) {
 }
 
 /**
- * 뉴스 목록을 사이드 패널 콘텐츠 영역에 렌더링한다.
+ * 뉴스 목록을 패널 콘텐츠 영역에 렌더링한다. "all" 모드에서는 각 항목에 습지명 뱃지를 붙인다.
  * @param {HTMLElement} content
  * @param {Array<object>} issues
  */
@@ -202,6 +381,7 @@ function renderIssueList(content, issues) {
 
 /**
  * 뉴스 항목 하나에 대한 <li> 엘리먼트를 생성한다 (상태뱃지 + 점검 버튼 3종 포함).
+ * viewMode가 "all"이고 wetland_name이 있으면 습지명 뱃지를 붙인다(클릭 시 해당 습지로 필터 전환).
  * @param {object} issue
  * @returns {HTMLLIElement}
  */
@@ -211,10 +391,15 @@ function buildIssueListItem(issue) {
   li.dataset.issueId = issue.id;
 
   const confirmBtnLabel = issue.status === "confirmed" ? "미점검으로" : "확인";
+  const wetlandBadgeHtml =
+    viewMode === "all" && issue.wetland_name
+      ? `<span class="issue-wetland-badge" data-wetland-id="${escapeHtml(String(issue.wetland_id))}">${escapeHtml(issue.wetland_name)}</span>`
+      : "";
 
   li.innerHTML = `
     <a class="issue-title-link" href="${escapeHtml(issue.link)}" target="_blank" rel="noopener">${escapeHtml(issue.title)}</a>
     <div class="issue-meta">
+      ${wetlandBadgeHtml}
       <span>${escapeHtml(issue.source || "출처 미상")}</span>
       <span>·</span>
       <span>${escapeHtml(formatDate(issue.published_at))}</span>
@@ -238,7 +423,24 @@ function buildIssueListItem(issue) {
   li.querySelector(".issue-action-reassign-cancel").addEventListener("click", () => toggleReassignForm(li, false));
   li.querySelector(".issue-action-reassign-confirm").addEventListener("click", () => onReassignConfirmClick(issue, li));
 
+  const wetlandBadge = li.querySelector(".issue-wetland-badge");
+  if (wetlandBadge) {
+    wetlandBadge.addEventListener("click", () => onWetlandBadgeClick(issue));
+  }
+
   return li;
+}
+
+/**
+ * 전체 목록 모드의 뉴스 항목에서 습지명 뱃지 클릭 시: 지도를 해당 습지로 이동시키고
+ * 패널을 해당 습지 필터 모드로 전환한다.
+ * @param {object} issue
+ */
+function onWetlandBadgeClick(issue) {
+  const wetland = wetlandListCache.find((w) => w.id === issue.wetland_id);
+  if (!wetland) return;
+  map.flyTo([wetland.lat, wetland.lng], CLUSTER_DISABLE_ZOOM);
+  openPanel(wetland);
 }
 
 /**
@@ -392,32 +594,118 @@ function showToast(message, isError = false) {
   }, 2500);
 }
 
+/**
+ * 패널 닫기 버튼 클릭 핸들러(모바일 하단 시트 전용 — 데스크톱에서는 버튼 자체가 숨겨짐).
+ */
 function closePanel() {
   document.getElementById("side-panel").hidden = true;
 }
 
 /**
- * [뉴스 수집] 버튼 클릭 핸들러: POST /api/collect 호출 후 마커를 갱신한다.
+ * [뉴스 수집] 버튼 클릭 핸들러.
+ * POST /api/collect 로 배치 수집을 시작(서버는 즉시 응답)하고, 이후 3초 간격으로
+ * GET /api/collect/status 를 폴링하며 버튼에 진행률을 표시한다.
+ * 이미 수집 중(alreadyRunning)이면 그대로 폴링만 시작한다.
  */
 async function onCollectClick() {
   const btn = document.getElementById("collect-btn");
-  const label = document.getElementById("collect-btn-label");
-  const spinner = document.getElementById("collect-spinner");
-
   btn.disabled = true;
-  spinner.hidden = false;
-  const originalLabel = label.textContent;
-  label.textContent = "수집 중...";
+  setCollectButtonBusy(true);
 
   try {
     await fetch("/api/collect", { method: "POST" });
-    await loadWetlands();
+    // started/alreadyRunning 어느 쪽이든 폴링으로 진행 상황을 따라간다.
+    startCollectPolling();
   } catch (err) {
-    console.error("뉴스 수집 중 오류가 발생했습니다.", err);
-  } finally {
+    console.error("뉴스 수집 시작 중 오류가 발생했습니다.", err);
+    setCollectButtonBusy(false);
     btn.disabled = false;
-    spinner.hidden = true;
-    label.textContent = originalLabel;
+    showToast("뉴스 수집을 시작하지 못했습니다.", true);
+  }
+}
+
+/**
+ * 페이지 로드 시 서버가 이미 수집 중이면 자동으로 폴링 모드에 진입한다.
+ * (다른 직원이 [뉴스 수집]을 눌러 진행 중일 때도 진행률이 보이도록.)
+ */
+async function resumeCollectionIfRunning() {
+  try {
+    const res = await fetch("/api/collect/status");
+    const status = await res.json();
+    if (status && status.running === 1) {
+      document.getElementById("collect-btn").disabled = true;
+      setCollectButtonBusy(true);
+      updateCollectProgressLabel(status);
+      startCollectPolling();
+    }
+  } catch (err) {
+    // 상태 조회 실패는 무시(수집 안 하는 상태로 간주).
+    console.error("수집 상태 확인 실패:", err);
+  }
+}
+
+/**
+ * 수집 상태 폴링을 시작한다(중복 시작 방지). 3초마다 status를 조회해 버튼 라벨을
+ * 갱신하고, running=0이 되면 폴링을 멈추고 마커/버튼을 원상 복구한다.
+ */
+function startCollectPolling() {
+  if (collectPollTimer) return; // 이미 폴링 중이면 중복 시작하지 않음
+
+  collectPollTimer = setInterval(async () => {
+    try {
+      const res = await fetch("/api/collect/status");
+      const status = await res.json();
+
+      if (!status || status.running === 0) {
+        stopCollectPolling();
+        await loadWetlands();
+        const collected = status ? status.collected : 0;
+        showToast(`뉴스 ${collected.toLocaleString("ko-KR")}건 수집 완료`);
+        return;
+      }
+
+      updateCollectProgressLabel(status);
+    } catch (err) {
+      console.error("수집 상태 폴링 실패:", err);
+    }
+  }, COLLECT_POLL_MS);
+}
+
+/**
+ * 수집 폴링을 중단하고 버튼을 원래 상태로 되돌린다.
+ */
+function stopCollectPolling() {
+  if (collectPollTimer) {
+    clearInterval(collectPollTimer);
+    collectPollTimer = null;
+  }
+  setCollectButtonBusy(false);
+  document.getElementById("collect-btn").disabled = false;
+}
+
+/**
+ * 수집 버튼의 진행 라벨을 "수집 중 processed / total" 형식으로 갱신한다.
+ * @param {{ processed: number, total: number }} status
+ */
+function updateCollectProgressLabel(status) {
+  const label = document.getElementById("collect-btn-label");
+  const processed = Number(status.processed) || 0;
+  const total = Number(status.total) || 0;
+  label.textContent = `수집 중 ${processed.toLocaleString("ko-KR")} / ${total.toLocaleString("ko-KR")}`;
+}
+
+/**
+ * 수집 버튼의 스피너/라벨을 진행 중 또는 평상시 상태로 전환한다.
+ * @param {boolean} busy
+ */
+function setCollectButtonBusy(busy) {
+  const label = document.getElementById("collect-btn-label");
+  const spinner = document.getElementById("collect-spinner");
+  spinner.hidden = !busy;
+  if (busy) {
+    label.textContent = "수집 중...";
+  } else {
+    label.textContent = "뉴스 수집";
   }
 }
 
@@ -515,7 +803,7 @@ function renderWetlandSearchResults(query) {
  * @param {object} wetland
  */
 function selectWetlandFromSearch(wetland) {
-  map.flyTo([wetland.lat, wetland.lng], 11);
+  map.flyTo([wetland.lat, wetland.lng], CLUSTER_DISABLE_ZOOM);
   openPanel(wetland);
   closeWetlandSearchResults();
 
@@ -588,13 +876,17 @@ async function onDateFilterClearClick() {
 }
 
 /**
- * 필터 변경 후 상태 표시·마커·열려 있는 패널을 일괄 새로고침한다.
+ * 필터 변경 후 상태 표시·마커·뉴스 패널을 일괄 새로고침한다.
+ * 데스크톱은 패널이 상시 노출이므로 모드(전체/습지)와 무관하게 항상 다시 불러오고,
+ * 모바일은 하단 시트가 열려 있을 때(습지 모드)만 새로고침한다.
  */
 async function refreshAfterFilterChange() {
   updateDateFilterStatus();
   await loadWetlands();
-  if (currentWetland) {
-    await openPanel(currentWetland);
+
+  const panel = document.getElementById("side-panel");
+  if (!panel.hidden) {
+    await loadIssues();
   }
 }
 
@@ -632,6 +924,76 @@ function formatFullDate(dateStr) {
   const month = Number(parts[1]);
   const day = Number(parts[2]);
   return `${year}년 ${month}월 ${day}일`;
+}
+
+/* ------------------------------------------------------------------ */
+/* 분할선 드래그 (지도 vs 뉴스 패널 비율 조절)                              */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 분할선 드래그 이벤트를 초기화하고, localStorage에 저장된 비율(또는 기본값)을 적용한다.
+ * 모바일(하단 시트 레이아웃)에서는 분할선이 CSS로 숨겨져 있으므로 드래그가 사실상 발생하지 않지만,
+ * 안전을 위해 핸들러 내부에서도 모바일이면 조기 반환한다.
+ */
+function initSplitHandle() {
+  const handle = document.getElementById("split-handle");
+  const mapPane = document.getElementById("map-pane");
+
+  applyMapRatio(loadStoredMapRatio());
+
+  handle.addEventListener("mousedown", (event) => {
+    if (isMobileViewport()) return;
+    event.preventDefault();
+    splitDragging = true;
+    handle.classList.add("split-handle--dragging");
+    document.body.style.userSelect = "none";
+  });
+
+  document.addEventListener("mousemove", (event) => {
+    if (!splitDragging) return;
+    const mainEl = document.querySelector(".app-main");
+    const rect = mainEl.getBoundingClientRect();
+    let ratio = (event.clientX - rect.left) / rect.width;
+    ratio = Math.min(Math.max(ratio, SPLIT_MIN_MAP_RATIO), SPLIT_MAX_MAP_RATIO);
+    applyMapRatio(ratio);
+  });
+
+  document.addEventListener("mouseup", () => {
+    if (!splitDragging) return;
+    splitDragging = false;
+    handle.classList.remove("split-handle--dragging");
+    document.body.style.userSelect = "";
+
+    const mainEl = document.querySelector(".app-main");
+    const ratio = mapPane.getBoundingClientRect().width / mainEl.getBoundingClientRect().width;
+    localStorage.setItem(SPLIT_RATIO_STORAGE_KEY, String(ratio));
+
+    if (map) map.invalidateSize();
+  });
+}
+
+/**
+ * localStorage에 저장된 지도 비율을 읽어온다. 없거나 유효 범위를 벗어나면 기본값을 반환한다.
+ * @returns {number}
+ */
+function loadStoredMapRatio() {
+  const stored = Number(localStorage.getItem(SPLIT_RATIO_STORAGE_KEY));
+  if (!Number.isFinite(stored) || stored < SPLIT_MIN_MAP_RATIO || stored > SPLIT_MAX_MAP_RATIO) {
+    return DEFAULT_MAP_RATIO;
+  }
+  return stored;
+}
+
+/**
+ * 뉴스 패널의 flex-basis를 지도 비율의 나머지(1 - ratio)로 설정한다.
+ * 지도 영역(.map-pane)은 flex:1 1 auto로 항상 나머지 공간을 채우므로 side-panel 너비만
+ * 고정하면 분할 비율이 그대로 반영된다.
+ * @param {number} ratio 지도 영역이 차지할 비율(0.4~0.8)
+ */
+function applyMapRatio(ratio) {
+  const sidePanel = document.getElementById("side-panel");
+  const panelRatio = 1 - ratio;
+  sidePanel.style.flexBasis = `${panelRatio * 100}%`;
 }
 
 /**
