@@ -81,6 +81,14 @@ const COLLECT_POLL_MS = 3000;
 /** 수집 상태 폴링 타이머 핸들(중복 폴링 방지). */
 let collectPollTimer = null;
 
+/**
+ * 습지 클릭 시 백그라운드 단건 수집(POST /api/wetlands/{id}/collect) 재호출을 막기 위한
+ * 세션 내 "습지 id → 마지막 수집 시각(ms)" 기록. 같은 습지를 짧은 시간에 반복 클릭해도
+ * COLLECT_SINGLE_COOLDOWN_MS 이내면 다시 fetch하지 않는다.
+ */
+const wetlandLastCollectAt = new Map();
+const COLLECT_SINGLE_COOLDOWN_MS = 10 * 60 * 1000; // 10분
+
 /* ------------------------------------------------------------------ */
 /* 지도 레이어 (일반/위성) 및 마커 클러스터링 관련 상수                        */
 /* ------------------------------------------------------------------ */
@@ -105,6 +113,8 @@ function init() {
     disableClusteringAtZoom: CLUSTER_DISABLE_ZOOM,
     iconCreateFunction: buildClusterIcon,
   }).addTo(map);
+
+  applyDefaultDateFilterIfEmpty();
 
   loadWetlands();
 
@@ -170,7 +180,8 @@ function initBaseLayers() {
 
 /**
  * 마커 클러스터 배지 아이콘을 생성한다. 하위 마커들의 issue_count 합계를 배지에 표시하고,
- * 합계가 0이면 회색, 0보다 크면 파랑 계열로 개별 마커 색 체계와 통일한다.
+ * 합계가 0이면 숫자 없이 작은 회색 점(개별 회색 마커와 톤은 같되, 클러스터임을 알 수 있도록
+ * 살짝 더 크게)으로 표시한다. 합계>0이면 기존대로 파랑 계열 배지 + 숫자를 표시한다.
  * @param {L.MarkerCluster} cluster
  * @returns {L.DivIcon}
  */
@@ -178,6 +189,16 @@ function buildClusterIcon(cluster) {
   const childMarkers = cluster.getAllChildMarkers();
   const totalIssues = childMarkers.reduce((sum, marker) => sum + (marker.options.issueCount || 0), 0);
   const totalNegative = childMarkers.reduce((sum, marker) => sum + (marker.options.negativeCount || 0), 0);
+
+  if (totalIssues === 0) {
+    // 개별 회색 마커(wetland-marker--empty, 14px)보다 살짝 크게 하여 클러스터임을 구분한다.
+    return L.divIcon({
+      className: "",
+      html: '<div class="wetland-cluster wetland-cluster--empty-dot"></div>',
+      iconSize: [18, 18],
+      iconAnchor: [9, 9],
+    });
+  }
 
   let sizeClass = "wetland-cluster--sm";
   let size = 36;
@@ -189,13 +210,12 @@ function buildClusterIcon(cluster) {
     size = 44;
   }
 
-  const emptyClass = totalIssues === 0 ? " wetland-cluster--empty" : "";
   // 하위에 부정보도 습지가 하나라도 있으면 빨간 테두리로 강조한다(집계 배지 색은 유지).
   const negativeClass = totalNegative > 0 ? " wetland-cluster--negative" : "";
 
   return L.divIcon({
     className: "",
-    html: `<div class="wetland-cluster ${sizeClass}${emptyClass}${negativeClass}">${totalIssues}</div>`,
+    html: `<div class="wetland-cluster ${sizeClass}${negativeClass}">${totalIssues}</div>`,
     iconSize: [size, size],
     iconAnchor: [size / 2, size / 2],
   });
@@ -306,6 +326,8 @@ function buildWetlandIcon(issueCount, negativeCount = 0) {
 
 /**
  * 습지 클릭(또는 검색 선택) 시 뉴스 패널을 해당 습지 모드로 전환하고 목록을 불러온다.
+ * 패널을 먼저 열고 기존 뉴스를 표시한 뒤, 백그라운드로 해당 습지만 즉시 재수집을 시도한다
+ * (완료 후 신규 뉴스가 있으면 목록/마커를 갱신하고 작은 안내를 띄운다).
  * @param {object} wetland
  */
 async function openPanel(wetland) {
@@ -318,6 +340,55 @@ async function openPanel(wetland) {
 
   updatePanelHeader();
   await loadIssues();
+
+  collectSingleWetlandInBackground(wetland);
+}
+
+/**
+ * 습지 하나만 백그라운드로 즉시 재수집한다(POST /api/wetlands/{id}/collect).
+ * 같은 습지를 COLLECT_SINGLE_COOLDOWN_MS(10분) 이내에 반복 클릭하면 스킵한다.
+ * 완료 후 신규 수집(collected>0)이 있고 여전히 같은 습지를 보고 있으면 목록/마커를
+ * 갱신하고 작은 토스트로 안내한다. collected=0이거나 실패하면 조용히 무시한다.
+ * @param {object} wetland
+ */
+async function collectSingleWetlandInBackground(wetland) {
+  const now = Date.now();
+  const lastAt = wetlandLastCollectAt.get(wetland.id);
+  if (lastAt && now - lastAt < COLLECT_SINGLE_COOLDOWN_MS) {
+    return;
+  }
+  wetlandLastCollectAt.set(wetland.id, now);
+
+  setPanelCollectingIndicator(true);
+
+  try {
+    const res = await fetch(`/api/wetlands/${encodeURIComponent(wetland.id)}/collect`, { method: "POST" });
+    const result = await res.json();
+
+    if (result && result.collected > 0) {
+      await loadWetlands();
+      // 사용자가 그 사이 다른 습지/모드로 이동하지 않았을 때만 목록을 새로고침한다.
+      if (viewMode === "wetland" && currentWetland && currentWetland.id === wetland.id) {
+        await loadIssues();
+        showToast(`새 뉴스 ${result.collected.toLocaleString("ko-KR")}건`);
+      }
+    }
+  } catch (err) {
+    // 백그라운드 수집 실패는 조용히 무시한다(기존 목록은 그대로 유지).
+    console.error("습지 단건 수집 실패:", err);
+  } finally {
+    setPanelCollectingIndicator(false);
+  }
+}
+
+/**
+ * 패널 제목 옆에 "최신 뉴스 확인 중..." 표시를 켜거나 끈다.
+ * @param {boolean} collecting
+ */
+function setPanelCollectingIndicator(collecting) {
+  const indicator = document.getElementById("panel-collecting-indicator");
+  if (!indicator) return;
+  indicator.hidden = !collecting;
 }
 
 /**
@@ -891,6 +962,41 @@ function closeWetlandSearchResults() {
 /* ------------------------------------------------------------------ */
 /* 날짜 기간 필터                                                       */
 /* ------------------------------------------------------------------ */
+
+/**
+ * 접속 시 filterState가 비어 있으면 기본으로 "최근 7일"(오늘-6일 ~ 오늘, 로컬 날짜 기준)을
+ * 적용한다. 날짜 input에도 값을 채우고 상태 배지를 갱신한다. loadWetlands()/loadIssues()는
+ * filterState를 그대로 참조하므로 이후 호출부터 자연히 7일 범위로 동작한다.
+ * (이미 filterState에 값이 있으면 — 예: 향후 URL 파라미터 등으로 설정된 경우 — 건드리지 않는다.)
+ */
+function applyDefaultDateFilterIfEmpty() {
+  if (filterState.from || filterState.to) return;
+
+  const today = new Date();
+  const sixDaysAgo = new Date(today);
+  sixDaysAgo.setDate(today.getDate() - 6);
+
+  filterState.from = toLocalDateString(sixDaysAgo);
+  filterState.to = toLocalDateString(today);
+
+  document.getElementById("date-filter-from").value = filterState.from;
+  document.getElementById("date-filter-to").value = filterState.to;
+
+  updateDateFilterStatus();
+}
+
+/**
+ * Date 객체를 로컬 시간대 기준 "YYYY-MM-DD" 문자열로 변환한다.
+ * (Date.prototype.toISOString()은 UTC 기준이라 자정 근처에 날짜가 하루 어긋날 수 있어 미사용.)
+ * @param {Date} date
+ * @returns {string}
+ */
+function toLocalDateString(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
 
 /**
  * 날짜 기간 필터 컨트롤([적용]/[해제])의 이벤트를 초기화한다.

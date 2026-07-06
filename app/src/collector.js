@@ -496,6 +496,57 @@ export async function startCollection(env) {
 }
 
 /**
+ * 습지 하나만 즉시 수집한다(전체 배치 수집의 collect_state와는 완전히 독립적).
+ * 사용자가 지도에서 특정 습지를 클릭했을 때, 그 습지의 최신 뉴스만 바로 가져오기 위한 용도.
+ * fetchItemsForWetland로 RSS를 가져와 INSERT OR IGNORE(batch)로 저장하고, 신규 저장분만
+ * AI로 분류한다(classifyAndPersist 재사용). 예외를 던지지 않고 항상 { collected, error? }
+ * 형태로 반환하여, 호출부(HTTP 라우트)가 실패해도 500 없이 안전하게 처리할 수 있게 한다.
+ * @param {*} env - Worker 환경 (DB/AI 바인딩 포함)
+ * @param {number} wetlandId
+ * @returns {Promise<{ collected: number, error?: string }>}
+ */
+export async function collectSingleWetland(env, wetlandId) {
+  try {
+    const wetland = await env.DB.prepare("SELECT id, name FROM wetlands WHERE id = ?")
+      .bind(wetlandId)
+      .first();
+
+    if (!wetland) {
+      return { collected: 0, error: "존재하지 않는 습지입니다." };
+    }
+
+    const rows = await fetchItemsForWetland(wetland);
+    if (rows.length === 0) {
+      return { collected: 0 };
+    }
+
+    const insertStmt = env.DB.prepare(
+      `INSERT OR IGNORE INTO news_issues (wetland_id, title, link, source, published_at)
+       VALUES (?, ?, ?, ?, ?)`
+    );
+    const batch = rows.map((r) => insertStmt.bind(r.wetlandId, r.title, r.link, r.source, r.pubDate));
+    const batchResults = await env.DB.batch(batch);
+
+    let newCount = 0;
+    const newlyInserted = [];
+    for (let i = 0; i < batchResults.length; i++) {
+      const res = batchResults[i];
+      if (res.meta && res.meta.changes > 0) {
+        newCount += res.meta.changes;
+        newlyInserted.push({ link: rows[i].link, title: rows[i].title });
+      }
+    }
+
+    await classifyAndPersist(env, newlyInserted);
+
+    return { collected: newCount };
+  } catch (err) {
+    console.error(`습지 단건 수집 실패(id=${wetlandId}):`, err);
+    return { collected: 0, error: String(err) };
+  }
+}
+
+/**
  * 배치 하나를 수집한다: collect_state 커서 위치부터 batchSize개 습지를 처리하고
  * 커서/진행률을 전진시킨다. running=0이면 아무 것도 하지 않고 done을 반환한다.
  *

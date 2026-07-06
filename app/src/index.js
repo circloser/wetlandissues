@@ -4,7 +4,7 @@
  * - 그 외 : 정적 자산(ASSETS)으로 폴백
  * - scheduled : 매일 뉴스 스크랩 배치 (US-002)
  */
-import { startCollection, collectBatch } from "./collector.js";
+import { startCollection, collectBatch, collectSingleWetland } from "./collector.js";
 
 export default {
   async fetch(request, env, ctx) {
@@ -28,6 +28,11 @@ export default {
 
     if (url.pathname === "/api/collect/status" && request.method === "GET") {
       return handleCollectStatus(request, env);
+    }
+
+    const wetlandCollectMatch = url.pathname.match(/^\/api\/wetlands\/(\d+)\/collect$/);
+    if (wetlandCollectMatch && request.method === "POST") {
+      return handleCollectSingleWetland(request, env, wetlandCollectMatch[1]);
     }
 
     const issuePatchMatch = url.pathname.match(/^\/api\/issues\/(\d+)$/);
@@ -189,6 +194,32 @@ async function handleCollectStatus(request, env) {
     });
   } catch (err) {
     return json({ error: "수집 상태 조회 중 오류가 발생했습니다.", detail: String(err) }, 500);
+  }
+}
+
+/**
+ * POST /api/wetlands/{id}/collect
+ * 특정 습지 한 곳만 즉시 RSS 수집한다(전체 배치 수집의 collect_state와 완전히 독립적 —
+ * 사용자가 지도에서 습지를 클릭했을 때 그 습지의 최신 뉴스만 바로 확인하기 위한 용도).
+ * 존재하지 않는 습지 id면 404. 그 외 오류는 collectSingleWetland가 { collected:0, error }
+ * 형태로 안전하게 반환하므로 그대로 200으로 전달한다(프론트가 조용히 무시할 수 있도록).
+ */
+async function handleCollectSingleWetland(request, env, wetlandIdRaw) {
+  try {
+    const wetlandId = Number(wetlandIdRaw);
+
+    const wetlandRow = await env.DB.prepare("SELECT id FROM wetlands WHERE id = ?")
+      .bind(wetlandId)
+      .first();
+
+    if (!wetlandRow) {
+      return json({ error: "존재하지 않는 습지입니다." }, 404);
+    }
+
+    const result = await collectSingleWetland(env, wetlandId);
+    return json(result);
+  } catch (err) {
+    return json({ error: "습지 단건 수집 중 오류가 발생했습니다.", detail: String(err) }, 500);
   }
 }
 
