@@ -99,10 +99,14 @@ const MAP_LAYER_STORAGE_KEY = "wetland-map-base-layer";
 /** 클러스터를 풀고 개별 마커를 보여줄 최소 줌 레벨(습지 검색 선택 시 이 값 이상으로 flyTo). */
 const CLUSTER_DISABLE_ZOOM = 12;
 
+/** 지도 기본 화면(대한민국 전역) — 초기 로드와 [전체 보기] 복귀에 사용. */
+const DEFAULT_MAP_CENTER = [36.3, 127.8];
+const DEFAULT_MAP_ZOOM = 7;
+
 init();
 
 function init() {
-  map = L.map("map").setView([36.3, 127.8], 7);
+  map = L.map("map").setView(DEFAULT_MAP_CENTER, DEFAULT_MAP_ZOOM);
 
   initBaseLayers();
 
@@ -398,6 +402,8 @@ async function showAllIssuesPanel() {
   viewMode = "all";
   currentWetland = null;
   updatePanelHeader();
+  // 전체 보기로 돌아올 때 지도도 전국 화면으로 복귀한다.
+  map.flyTo(DEFAULT_MAP_CENTER, DEFAULT_MAP_ZOOM);
   await loadIssues();
 }
 
@@ -1014,6 +1020,42 @@ function initDateFilter() {
 
   applyBtn.addEventListener("click", onDateFilterApplyClick);
   clearBtn.addEventListener("click", onDateFilterClearClick);
+
+  // 빠른 기간 버튼([1일]/[3일]/[1주]/[1달]): 누르면 즉시 해당 기간을 적용한다.
+  for (const btn of document.querySelectorAll(".date-filter-preset-btn")) {
+    btn.addEventListener("click", () => applyPresetRange(Number(btn.dataset.days)));
+  }
+}
+
+/**
+ * 오늘까지 최근 N일을 기간으로 설정하고 즉시 적용한다(빠른 기간 버튼용).
+ * @param {number} days 1(오늘만)/3/7/30 등
+ */
+async function applyPresetRange(days) {
+  const today = new Date();
+  const from = new Date();
+  from.setDate(today.getDate() - (days - 1));
+
+  document.getElementById("date-filter-from").value = toLocalDateString(from);
+  document.getElementById("date-filter-to").value = toLocalDateString(today);
+
+  await onDateFilterApplyClick();
+}
+
+/**
+ * 현재 filterState가 빠른 기간 버튼 중 하나와 정확히 일치하면 해당 버튼을 강조한다.
+ * (기본 7일 필터로 시작하면 [1주]가 자동으로 강조된다.)
+ */
+function updatePresetHighlight() {
+  const todayStr = toLocalDateString(new Date());
+
+  for (const btn of document.querySelectorAll(".date-filter-preset-btn")) {
+    const days = Number(btn.dataset.days);
+    const from = new Date();
+    from.setDate(from.getDate() - (days - 1));
+    const matches = filterState.to === todayStr && filterState.from === toLocalDateString(from);
+    btn.classList.toggle("date-filter-preset-btn--active", matches);
+  }
 }
 
 /**
@@ -1077,19 +1119,42 @@ function updateDateFilterStatus() {
   const statusEl = document.getElementById("date-filter-status");
   const dateFilterEl = document.getElementById("date-filter");
 
+  updatePresetHighlight();
+
   if (!filterState.from && !filterState.to) {
     statusEl.hidden = true;
     statusEl.textContent = "";
+    statusEl.title = "";
     dateFilterEl.classList.remove("date-filter--active");
     return;
   }
 
-  const fromLabel = filterState.from ? formatFullDate(filterState.from) : "처음";
-  const toLabel = filterState.to ? formatFullDate(filterState.to) : "현재";
+  // 헤더 안 인라인 표시라 공간이 좁으므로 짧은 형식(M/D)을 쓰고,
+  // 마우스를 올리면 전체 날짜(연도 포함)를 툴팁으로 보여준다.
+  const fromShort = filterState.from ? formatShortDate(filterState.from) : "처음";
+  const toShort = filterState.to ? formatShortDate(filterState.to) : "현재";
+  const fromFull = filterState.from ? formatFullDate(filterState.from) : "처음";
+  const toFull = filterState.to ? formatFullDate(filterState.to) : "현재";
 
-  statusEl.textContent = `${fromLabel} ~ ${toLabel} 적용 중`;
+  statusEl.textContent = `${fromShort}~${toShort} 적용 중`;
+  statusEl.title = `${fromFull} ~ ${toFull} 적용 중`;
   statusEl.hidden = false;
   dateFilterEl.classList.add("date-filter--active");
+}
+
+/**
+ * "YYYY-MM-DD"를 짧은 "M/D" 형식으로 변환한다(올해가 아니면 "YYYY.M.D").
+ * @param {string} dateStr
+ * @returns {string}
+ */
+function formatShortDate(dateStr) {
+  const parts = dateStr.split("-");
+  if (parts.length !== 3) return dateStr;
+  const year = Number(parts[0]);
+  const month = Number(parts[1]);
+  const day = Number(parts[2]);
+  if (year !== new Date().getFullYear()) return `${year}.${month}.${day}`;
+  return `${month}/${day}`;
 }
 
 /**

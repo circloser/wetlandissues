@@ -291,19 +291,47 @@ button, input {
   background: var(--color-surface-sub);
 }
 
+/* 기간 적용 중 표시 — [해제] 버튼 바로 오른쪽 인라인 알약(전체 보기 버튼과 겹침 방지) */
 .date-filter-status {
-  position: fixed;
-  top: calc(var(--header-height) + 10px);
-  right: 24px;
-  padding: 7px 16px;
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 12px;
   border-radius: 999px;
   background: var(--color-primary);
   color: #ffffff;
-  font-size: 0.78rem;
+  font-size: 0.74rem;
   font-weight: 600;
-  box-shadow: 0 4px 12px rgba(49, 130, 246, 0.3);
-  z-index: 999;
+  white-space: nowrap;
   animation: status-pop 0.2s var(--ease-toss);
+}
+
+/* 빠른 기간 버튼 ([1일][3일][1주][1달]) */
+.date-filter-presets {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.date-filter-preset-btn {
+  padding: 6px 10px;
+  min-height: 32px;
+  border: 1.5px solid var(--color-border-strong);
+  border-radius: 6px;
+  background: var(--color-surface);
+  color: var(--color-text-sub);
+  font-size: 0.76rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s var(--ease-toss), border-color 0.15s var(--ease-toss);
+}
+
+.date-filter-preset-btn:hover {
+  background: var(--color-surface-sub);
+}
+
+.date-filter-preset-btn--active {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+  color: var(--color-primary-strong);
 }
 
 @keyframes status-pop {
@@ -1011,11 +1039,7 @@ button, input {
   }
 
   .date-filter-status {
-    top: calc(var(--header-height) + 6px);
-    right: 14px;
-    left: 14px;
-    text-align: center;
-    font-size: 0.74rem;
+    font-size: 0.72rem;
   }
 
   .app-main {
