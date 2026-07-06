@@ -55,11 +55,15 @@ function makeMockDb({ state, wetlands }) {
             db.state.running = 0;
             db.state.updated_at = bound[0];
           } else {
-            // 배치 전진: bind = [cursor, processed, collected, running, now]
+            // 배치 전진: bind = [cursor, processed, collected, doneFlag, now]
+            // 실제 SQL: running = CASE WHEN doneFlag = 1 THEN 0 ELSE running END
+            // (완료 시에만 0으로 내리고, 진행 중에는 외부 중단(running=0)을 덮어쓰지 않음)
             db.state.cursor_pos = bound[0];
             db.state.processed = bound[1];
             db.state.collected = bound[2];
-            db.state.running = bound[3];
+            if (bound[3] === 1) {
+              db.state.running = 0;
+            }
             db.state.updated_at = bound[4];
           }
         }

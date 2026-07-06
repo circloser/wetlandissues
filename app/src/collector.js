@@ -360,13 +360,17 @@ export async function collectBatch(env, batchSize = BATCH_SIZE) {
   const collected = state.collected + newCount;
   const done = nextCursor >= state.total;
 
+  // running은 완료 시에만 0으로 내리고, 진행 중에는 기존 값을 유지한다.
+  // (무조건 1로 쓰면 외부에서 running=0으로 중단시켜도 진행 중이던 배치가
+  //  저장 시점에 1로 되살려 중단이 무시되는 경합이 생긴다)
   await env.DB.prepare(
     `UPDATE collect_state
        SET cursor_pos = ?, processed = ?, collected = ?,
-           running = ?, updated_at = ?
+           running = CASE WHEN ? = 1 THEN 0 ELSE running END,
+           updated_at = ?
      WHERE id = 1`
   )
-    .bind(nextCursor, processed, collected, done ? 0 : 1, now)
+    .bind(nextCursor, processed, collected, done ? 1 : 0, now)
     .run();
 
   return { done, processed, total: state.total, collected };

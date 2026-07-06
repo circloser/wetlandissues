@@ -40,13 +40,29 @@ export default {
   },
 
   async scheduled(event, env, ctx) {
-    // 매일 뉴스 수집을 시작하고, 배치 체인으로 전체 습지를 순회한다.
-    // scheduled에는 request가 없으므로 self URL로 env.SELF_URL(배포 주소)을 사용한다.
-    console.log("scheduled 트리거 실행됨 — 뉴스 수집 시작", event.cron);
-    const result = await startCollection(env);
-    console.log("수집 시작 결과:", JSON.stringify(result));
-    if (result.started && env.SELF_URL) {
+    // cron 2종:
+    //  - "0 21 * * *"  : 매일 KST 06시, 새 수집 시작
+    //  - "*/5 * * * *" : 5분마다, 진행 중(running=1)인데 멈춰 있는 체인을 이어붙임
+    // 배치 체인은 서비스 바인딩 중첩 깊이 제한 때문에 한 번에 약 10배치(350곳)까지만
+    // 이어지고 끊길 수 있다(로컬 dev에는 이 제한이 없어 로컬 검증만으로는 안 드러남).
+    // 5분 간격 cron이 끊긴 체인을 자동 재개하므로 어떤 원인으로 끊겨도 스스로 복구된다.
+    const state = await env.DB.prepare(
+      "SELECT running FROM collect_state WHERE id = 1"
+    ).first();
+
+    if (state && state.running === 1) {
+      console.log("scheduled — 진행 중인 수집 체인 재개", event.cron);
       runChain(env, ctx, env.SELF_URL);
+      return;
+    }
+
+    if (event.cron === "0 21 * * *") {
+      console.log("scheduled — 일일 뉴스 수집 시작", event.cron);
+      const result = await startCollection(env);
+      console.log("수집 시작 결과:", JSON.stringify(result));
+      if (result.started) {
+        runChain(env, ctx, env.SELF_URL);
+      }
     }
   },
 };
