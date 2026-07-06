@@ -803,6 +803,13 @@ function startCollectPolling() {
       }
 
       updateCollectProgressLabel(status);
+
+      // 브라우저가 릴레이의 '다음 배치'를 직접 깨운다. 서버 내부 자기연쇄는 중첩 깊이
+      // 제한으로 끊길 수 있지만(5분 cron이 재개), 브라우저에서 보내는 이 요청은 매번
+      // 새로운 최상위 요청이라 제한이 없어 수집이 끊김 없이 이어진다.
+      // 서버는 running=1일 때만 배치를 실행하고(아니면 204), 커서 낙관적 잠금이 있어
+      // cron·체인과 겹쳐도 안전하다. 실패는 무시(다음 폴링 틱이 다시 시도).
+      fetch("/api/collect/continue", { method: "POST" }).catch(() => {});
     } catch (err) {
       console.error("수집 상태 폴링 실패:", err);
     }

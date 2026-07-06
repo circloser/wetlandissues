@@ -55,14 +55,20 @@ function makeMockDb({ state, wetlands }) {
             db.state.collected = 0;
             db.state.running = 1;
             db.state.updated_at = bound[2];
+            return { meta: { changes: 1 } };
           } else if (/running = 0, updated_at/.test(sql)) {
             // 빈 배치 종료 처리
             db.state.running = 0;
             db.state.updated_at = bound[0];
+            return { meta: { changes: 1 } };
           } else {
-            // 배치 전진: bind = [cursor, processed, collected, doneFlag, now]
+            // 배치 전진: bind = [cursor, processed, collected, doneFlag, now, expectedCursor]
             // 실제 SQL: running = CASE WHEN doneFlag = 1 THEN 0 ELSE running END
-            // (완료 시에만 0으로 내리고, 진행 중에는 외부 중단(running=0)을 덮어쓰지 않음)
+            //           WHERE id = 1 AND cursor_pos = expectedCursor (낙관적 잠금)
+            // 잠금 조건이 안 맞으면(다른 invocation이 먼저 전진) 아무것도 반영하지 않는다.
+            if (bound[5] !== db.state.cursor_pos) {
+              return { meta: { changes: 0 } };
+            }
             db.state.cursor_pos = bound[0];
             db.state.processed = bound[1];
             db.state.collected = bound[2];
@@ -70,6 +76,7 @@ function makeMockDb({ state, wetlands }) {
               db.state.running = 0;
             }
             db.state.updated_at = bound[4];
+            return { meta: { changes: 1 } };
           }
         }
         return { meta: { changes: 0 } };

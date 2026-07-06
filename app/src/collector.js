@@ -199,6 +199,12 @@ function nowUtc() {
 const FETCH_TIMEOUT_MS = 8000;
 
 /**
+ * 배치 내 RSS 동시 fetch 개수.
+ * Cloudflare Workers는 요청당 동시 열린 연결을 6개로 제한하므로 그에 맞춘다.
+ */
+const CONCURRENT_FETCHES = 6;
+
+/**
  * 우선순위에 따라 RSS를 가져온다. 앞선 소스가 실패(또는 타임아웃)하면 다음 소스를 시도하고,
  * 전부 실패하면 마지막 오류를 던진다.
  * @param {string} wetlandName
@@ -589,16 +595,25 @@ export async function collectBatch(env, batchSize = BATCH_SIZE) {
   }
 
   // 습지 단위 예외를 격리하며 저장할 아이템을 한 번에 모은다(fetch만, D1 저장은 아래에서 일괄).
+  // 순차 fetch는 배치당 수십 초가 걸리므로, Workers의 동시 연결 한도(6)에 맞춰
+  // 6개씩 병렬로 가져온다 — subrequest 수는 동일하고 소요 시간만 크게 줄어든다.
   const rowsToInsert = [];
-  for (const wetland of wetlands) {
-    try {
-      const rows = await fetchItemsForWetland(wetland);
-      rowsToInsert.push(...rows);
-    } catch (err) {
-      // 한 습지 수집 실패는 배치 전체를 막지 않는다.
-      console.error(`습지 "${wetland.name}" 뉴스 수집 실패:`, err);
+  let nextIndex = 0;
+  const fetchWorker = async () => {
+    while (nextIndex < wetlands.length) {
+      const wetland = wetlands[nextIndex++];
+      try {
+        const rows = await fetchItemsForWetland(wetland);
+        rowsToInsert.push(...rows);
+      } catch (err) {
+        // 한 습지 수집 실패는 배치 전체를 막지 않는다.
+        console.error(`습지 "${wetland.name}" 뉴스 수집 실패:`, err);
+      }
     }
-  }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(CONCURRENT_FETCHES, wetlands.length) }, fetchWorker)
+  );
 
   // 모은 아이템을 D1 batch()로 한 번에 저장(subrequest 절약). meta.changes 합=신규 건수.
   // 신규로 저장된 행(changes>0)의 link/title만 모아 두었다가 아래에서 AI 분류에 쓴다.
@@ -650,15 +665,23 @@ export async function collectBatch(env, batchSize = BATCH_SIZE) {
   // running은 완료 시에만 0으로 내리고, 진행 중에는 기존 값을 유지한다.
   // (무조건 1로 쓰면 외부에서 running=0으로 중단시켜도 진행 중이던 배치가
   //  저장 시점에 1로 되살려 중단이 무시되는 경합이 생긴다)
-  await env.DB.prepare(
+  // WHERE cursor_pos = ? (낙관적 잠금): 브라우저 폴링·cron·체인이 동시에 배치를 돌려도
+  // 같은 커서에서 시작한 배치 중 하나만 전진을 기록한다. 진 쪽의 INSERT는 OR IGNORE라
+  // 무해하고, 커서가 이중 전진해 습지를 건너뛰는 것만 정확히 방지된다.
+  const advanceResult = await env.DB.prepare(
     `UPDATE collect_state
        SET cursor_pos = ?, processed = ?, collected = ?,
            running = CASE WHEN ? = 1 THEN 0 ELSE running END,
            updated_at = ?
-     WHERE id = 1`
+     WHERE id = 1 AND cursor_pos = ?`
   )
-    .bind(nextCursor, processed, collected, done ? 1 : 0, now)
+    .bind(nextCursor, processed, collected, done ? 1 : 0, now, state.cursor_pos)
     .run();
+
+  if (!advanceResult.meta || advanceResult.meta.changes === 0) {
+    // 다른 invocation이 먼저 이 배치 구간을 처리·전진시킴 — 이번 결과는 버린다.
+    return { done: false, processed: state.processed, total: state.total, collected: state.collected };
+  }
 
   return { done, processed, total: state.total, collected };
 }
