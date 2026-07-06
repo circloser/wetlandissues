@@ -140,8 +140,9 @@ function init() {
     loadIssues();
   }
 
-  // 페이지 로드 시 이미 수집 중이면(다른 직원이 돌리는 중이면) 자동으로 폴링 모드에 진입한다.
-  resumeCollectionIfRunning();
+  // 페이지 로드 시 뉴스 신선도 확인: 최근 12시간 내 수집 완료면 아무것도 돌리지 않고
+  // "최신 확인" 표시만, 오래됐으면 자동으로 한 바퀴만 돌고 멈춘다.
+  ensureFreshNews();
 }
 
 /**
@@ -755,6 +756,7 @@ async function onCollectClick() {
   const btn = document.getElementById("collect-btn");
   btn.disabled = true;
   setCollectButtonBusy(true);
+  hideFreshnessLabel();
 
   try {
     await fetch("/api/collect", { method: "POST" });
@@ -768,24 +770,88 @@ async function onCollectClick() {
   }
 }
 
+/** 수집 완료 후 이 시간(12시간)이 지나기 전에는 접속 시 자동 수집을 돌리지 않는다. */
+const FRESHNESS_MAX_AGE_MS = 12 * 60 * 60 * 1000;
+
 /**
- * 페이지 로드 시 서버가 이미 수집 중이면 자동으로 폴링 모드에 진입한다.
- * (다른 직원이 [뉴스 수집]을 눌러 진행 중일 때도 진행률이 보이도록.)
+ * 페이지 로드 시 뉴스 신선도를 확인한다.
+ * - 이미 수집이 돌고 있으면: 진행률 폴링에 합류한다(다른 직원이 돌린 것도 보임).
+ * - 마지막 수집 완료가 12시간 이내면: 아무것도 돌리지 않고 "최신 확인" 표시만 남긴다.
+ * - 12시간이 지났으면: 자동으로 한 바퀴만 수집하고, 끝나면 스스로 멈춘다.
  */
-async function resumeCollectionIfRunning() {
+async function ensureFreshNews() {
   try {
     const res = await fetch("/api/collect/status");
     const status = await res.json();
+
     if (status && status.running === 1) {
-      document.getElementById("collect-btn").disabled = true;
-      setCollectButtonBusy(true);
-      updateCollectProgressLabel(status);
-      startCollectPolling();
+      enterCollectingMode(status);
+      return;
     }
+
+    const lastMs = parseUtcDbTime(status && status.updated_at);
+    if (lastMs && Date.now() - lastMs < FRESHNESS_MAX_AGE_MS) {
+      // 충분히 최신 — 수집을 돌리지 않고 확인 시각만 표시한다.
+      setFreshnessLabel(lastMs);
+      return;
+    }
+
+    // 오래됐으면 자동으로 한 바퀴 수집(완료되면 스스로 멈추고 확인 완료 표시로 전환).
+    await fetch("/api/collect", { method: "POST" });
+    enterCollectingMode(null);
   } catch (err) {
     // 상태 조회 실패는 무시(수집 안 하는 상태로 간주).
     console.error("수집 상태 확인 실패:", err);
   }
+}
+
+/**
+ * 수집 진행 UI로 전환하고 폴링을 시작한다.
+ * @param {object|null} status 이미 알고 있는 진행 상태(없으면 폴링이 곧 채움)
+ */
+function enterCollectingMode(status) {
+  document.getElementById("collect-btn").disabled = true;
+  setCollectButtonBusy(true);
+  if (status) updateCollectProgressLabel(status);
+  hideFreshnessLabel();
+  startCollectPolling();
+}
+
+/**
+ * DB의 UTC "YYYY-MM-DD HH:MM:SS" 문자열을 ms 타임스탬프로 변환한다(실패 시 null).
+ * @param {string|null|undefined} value
+ * @returns {number|null}
+ */
+function parseUtcDbTime(value) {
+  if (!value) return null;
+  const ms = Date.parse(`${value.replace(" ", "T")}Z`);
+  return Number.isNaN(ms) ? null : ms;
+}
+
+/**
+ * 버튼 옆 "최신 확인: ..." 안심 표시를 갱신한다 — 지금은 수집이 돌고 있지 않고,
+ * 언제 마지막으로 확인했는지를 보여준다.
+ * @param {number} lastMs 마지막 수집 완료 시각(ms)
+ */
+function setFreshnessLabel(lastMs) {
+  const el = document.getElementById("collect-freshness");
+  const diffMin = Math.floor((Date.now() - lastMs) / 60000);
+
+  let when;
+  if (diffMin < 1) when = "방금 전";
+  else if (diffMin < 60) when = `${diffMin}분 전`;
+  else if (diffMin < 24 * 60) when = `${Math.floor(diffMin / 60)}시간 전`;
+  else {
+    const d = new Date(lastMs);
+    when = `${d.getMonth() + 1}월 ${d.getDate()}일`;
+  }
+
+  el.textContent = `최신 확인: ${when}`;
+  el.hidden = false;
+}
+
+function hideFreshnessLabel() {
+  document.getElementById("collect-freshness").hidden = true;
 }
 
 /**
@@ -802,6 +868,7 @@ function startCollectPolling() {
 
       if (!status || status.running === 0) {
         stopCollectPolling();
+        setFreshnessLabel(Date.now()); // 방금 확인 완료 — 더 이상 돌지 않음을 표시
         await loadWetlands();
         const collected = status ? status.collected : 0;
         showToast(`뉴스 ${collected.toLocaleString("ko-KR")}건 수집 완료`);
