@@ -249,6 +249,218 @@ async function fetchItemsForWetland(wetland) {
   return rows;
 }
 
+/* ------------------------------------------------------------------ */
+/* AI 부정보도 분류 (Workers AI)                                         */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 부정보도 분류에 사용할 Workers AI 모델.
+ * 한국어 이해가 가능하고 지시(JSON 배열만 출력)를 잘 따르는 최신 멀티링구얼 모델.
+ * 주의: Workers AI 모델은 지원 종료(deprecation)될 수 있음 — 분류가 전부 미판정(NULL)으로
+ * 남고 로그에 "This model was deprecated"가 보이면 `npx wrangler ai models`로
+ * 현행 모델을 확인해 이 상수만 교체하면 된다. (llama-3.1-8b-instruct가 2026-05-30 종료되어
+ * gemma-4로 교체한 전례 있음)
+ */
+const CLASSIFY_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+// 주의 2: gemma-4 등 '추론(reasoning)형' 모델은 답변 전에 생각을 message.reasoning에
+// 길게 쓰다 max_tokens를 소진해 content가 비는 문제가 있음(2026-07 확인) —
+// 반드시 추론 없이 바로 답하는 instruct 계열을 쓸 것.
+
+/**
+ * 점진 백필 시 한 배치에서 추가로 재분류할 미판정 뉴스 최대 건수.
+ * 신규 분류(AI 1회) + 백필(AI 1회) = 배치당 AI 호출 총 2회로 subrequest 예산 내에 든다.
+ */
+export const BACKFILL_LIMIT = 30;
+
+/**
+ * AI 응답 문자열에서 0/1 정수 JSON 배열을 방어적으로 추출한다.
+ * 모델이 코드블록(```json ... ```)이나 설명 문장으로 감싸 응답해도 첫 번째 대괄호 배열만
+ * 파싱한다. 파싱 실패 시 null을 반환한다(호출부에서 미판정으로 처리).
+ * @param {string} text AI가 반환한 원본 텍스트
+ * @returns {number[]|null} 0/1 배열 또는 파싱 실패 시 null
+ */
+export function parseClassificationResponse(text) {
+  if (typeof text !== "string") return null;
+
+  // 가장 바깥 대괄호 쌍을 찾아 그 안만 JSON으로 파싱한다(코드블록/설명문 제거).
+  const start = text.indexOf("[");
+  const end = text.lastIndexOf("]");
+  if (start === -1 || end === -1 || end <= start) return null;
+
+  let parsed;
+  try {
+    parsed = JSON.parse(text.slice(start, end + 1));
+  } catch {
+    return null;
+  }
+
+  if (!Array.isArray(parsed)) return null;
+
+  // 각 요소를 0 또는 1로 정규화한다(true/1/"1"→1, 그 외→0). 요소가 숫자/불리언/문자열이
+  // 아니면(객체 등) 판정 불가로 보고 배열 전체를 실패 처리한다.
+  const result = [];
+  for (const item of parsed) {
+    if (typeof item === "number") {
+      result.push(item === 1 ? 1 : 0);
+    } else if (typeof item === "boolean") {
+      result.push(item ? 1 : 0);
+    } else if (typeof item === "string") {
+      const trimmed = item.trim();
+      if (trimmed === "1") result.push(1);
+      else if (trimmed === "0") result.push(0);
+      else return null;
+    } else {
+      return null;
+    }
+  }
+  return result;
+}
+
+/**
+ * 뉴스 제목 배열을 한 번의 AI 호출로 분류한다.
+ * 각 제목이 "습지에 대한 부정적 소식(오염·훼손·불법행위·개발위협·생태계 피해·갈등·사고 등)"
+ * 인지 판단해 제목과 같은 길이의 0/1 배열을 반환한다(1=부정, 0=일반).
+ *
+ * AI는 부가 기능이므로 방어적으로 동작한다:
+ *  - env.AI 바인딩이 없거나 호출/파싱이 실패하거나 응답 길이가 제목 수와 다르면 null 반환.
+ *  - null이면 호출부는 해당 배치를 전부 미판정(NULL)으로 남기고 수집 자체는 계속한다.
+ *
+ * @param {*} env - Worker 환경 (AI 바인딩 포함)
+ * @param {string[]} titles - 분류할 뉴스 제목 배열
+ * @returns {Promise<number[]|null>} titles와 같은 길이의 0/1 배열, 실패 시 null
+ */
+/**
+ * Workers AI 텍스트 생성 응답에서 본문 텍스트를 꺼낸다.
+ * 모델·세대에 따라 응답 포장이 다르다: 구형은 { response }, 일부는 { output_text },
+ * OpenAI 호환형은 { choices: [{ message: { content } }] }, responses형은 output 배열.
+ * 어떤 형태든 문자열 본문을 찾으면 반환하고, 못 찾으면 null.
+ * @param {*} response
+ * @returns {string|null}
+ */
+function extractAiText(response) {
+  if (!response) return null;
+  if (typeof response === "string") return response;
+  if (typeof response.response === "string") return response.response;
+  if (typeof response.output_text === "string") return response.output_text;
+
+  const choice = Array.isArray(response.choices) ? response.choices[0] : null;
+  if (choice) {
+    if (choice.message && typeof choice.message.content === "string") return choice.message.content;
+    if (typeof choice.text === "string") return choice.text;
+  }
+
+  if (Array.isArray(response.output)) {
+    for (const part of response.output) {
+      if (part && Array.isArray(part.content)) {
+        const textPart = part.content.find((c) => c && typeof c.text === "string");
+        if (textPart) return textPart.text;
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
+ * 로그용 JSON 미리보기(순환 참조·과대 출력 방지).
+ * @param {*} value
+ * @returns {string}
+ */
+function safeJsonPreview(value) {
+  try {
+    return JSON.stringify(value).slice(0, 400);
+  } catch {
+    return String(value);
+  }
+}
+
+export async function classifyTitles(env, titles) {
+  if (!env || !env.AI || typeof env.AI.run !== "function") return null;
+  if (!Array.isArray(titles) || titles.length === 0) return null;
+
+  // 제목마다 번호를 붙여 순서를 명확히 하고, 결과 배열 순서를 강제한다.
+  const numbered = titles.map((t, i) => `${i + 1}. ${t}`).join("\n");
+
+  const systemPrompt =
+    "당신은 대한민국 습지 관련 뉴스 제목을 분류하는 도우미입니다. " +
+    "각 제목이 습지에 대한 '부정적 소식'인지 판단하세요. " +
+    "부정적 소식이란 오염, 훼손, 불법행위, 개발 위협, 생태계 피해, 갈등, 사고 등을 뜻합니다. " +
+    "복원 성공, 생물 증가, 축제, 탐방 안내 같은 긍정·중립 소식은 부정이 아닙니다. " +
+    "각 제목에 대해 부정이면 1, 아니면 0을 매겨 JSON 배열만 출력하세요. " +
+    "제목 수와 정확히 같은 길이의 배열이어야 하며, 설명 없이 배열만 출력하세요. " +
+    "예: [1,0,0,1]";
+
+  const userPrompt = `다음 ${titles.length}개 제목을 분류하세요:\n${numbered}`;
+
+  let response;
+  try {
+    response = await env.AI.run(CLASSIFY_MODEL, {
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+      // 결정적 출력을 위해 온도를 낮춘다. 토큰은 배열 출력에 충분한 여유를 둔다.
+      temperature: 0,
+      max_tokens: 512,
+    });
+  } catch (err) {
+    console.error("AI 분류 호출 실패 — 해당 배치는 미판정으로 남김:", err);
+    return null;
+  }
+
+  const text = extractAiText(response);
+  const labels = parseClassificationResponse(text);
+
+  if (!labels) {
+    // 원인 진단을 위해 원본 응답 구조 일부를 함께 남긴다.
+    console.error(
+      "AI 분류 응답 파싱 실패 — 해당 배치는 미판정으로 남김:",
+      text,
+      "| raw:",
+      safeJsonPreview(response)
+    );
+    return null;
+  }
+
+  // 길이가 제목 수와 다르면 매칭 신뢰도가 없으므로 전부 미판정 처리한다.
+  if (labels.length !== titles.length) {
+    console.error(
+      `AI 분류 응답 길이 불일치(제목 ${titles.length} vs 응답 ${labels.length}) — 미판정으로 남김`
+    );
+    return null;
+  }
+
+  return labels;
+}
+
+/**
+ * 주어진 뉴스 행들의 제목을 AI로 분류하고, is_negative/negative_source='ai'를 D1에 일괄 반영한다.
+ * link를 키로 UPDATE 하므로 신규 저장분·기존 백필분 모두 같은 방식으로 처리된다.
+ * AI 분류가 실패(null)하면 아무 것도 갱신하지 않는다(미판정 유지). 수집 흐름을 막지 않도록
+ * 내부 예외는 로그만 남기고 삼킨다.
+ * @param {*} env
+ * @param {Array<{ link: string, title: string }>} rows - link/title을 가진 뉴스 행
+ * @returns {Promise<number>} is_negative가 실제로 설정된 건수(실패 시 0)
+ */
+async function classifyAndPersist(env, rows) {
+  if (!rows || rows.length === 0) return 0;
+
+  try {
+    const labels = await classifyTitles(env, rows.map((r) => r.title));
+    if (!labels) return 0;
+
+    const updateStmt = env.DB.prepare(
+      "UPDATE news_issues SET is_negative = ?, negative_source = 'ai' WHERE link = ?"
+    );
+    const batch = rows.map((r, i) => updateStmt.bind(labels[i], r.link));
+    await env.DB.batch(batch);
+    return rows.length;
+  } catch (err) {
+    console.error("AI 분류 결과 저장 실패 — 미판정으로 남김:", err);
+    return 0;
+  }
+}
+
 /**
  * 뉴스 수집을 시작한다(커서/진행률 초기화).
  * 이미 running=1이고 마지막 갱신이 10분 이내면 중복 시작으로 보고 아무 것도 하지 않는다.
@@ -338,7 +550,9 @@ export async function collectBatch(env, batchSize = BATCH_SIZE) {
   }
 
   // 모은 아이템을 D1 batch()로 한 번에 저장(subrequest 절약). meta.changes 합=신규 건수.
+  // 신규로 저장된 행(changes>0)의 link/title만 모아 두었다가 아래에서 AI 분류에 쓴다.
   let newCount = 0;
+  const newlyInserted = [];
   if (rowsToInsert.length > 0) {
     const insertStmt = env.DB.prepare(
       `INSERT OR IGNORE INTO news_issues (wetland_id, title, link, source, published_at)
@@ -348,11 +562,33 @@ export async function collectBatch(env, batchSize = BATCH_SIZE) {
       insertStmt.bind(r.wetlandId, r.title, r.link, r.source, r.pubDate)
     );
     const batchResults = await env.DB.batch(batch);
-    for (const res of batchResults) {
+    for (let i = 0; i < batchResults.length; i++) {
+      const res = batchResults[i];
       if (res.meta && res.meta.changes > 0) {
         newCount += res.meta.changes;
+        newlyInserted.push({ link: rowsToInsert[i].link, title: rowsToInsert[i].title });
       }
     }
+  }
+
+  // AI 부정보도 분류(부가 기능 — 실패해도 수집은 계속). 배치당 AI 호출은 최대 2회로 제한한다:
+  //  1) 방금 신규 저장된 뉴스 제목을 분류(classifyAndPersist).
+  //  2) 점진 백필: is_negative가 아직 NULL이고 숨김 아닌 기존 뉴스를 최신순 BACKFILL_LIMIT건만
+  //     추가 분류 → 기존 수집분도 며칠 내 자동으로 채워진다.
+  await classifyAndPersist(env, newlyInserted);
+
+  try {
+    const { results: pending } = await env.DB.prepare(
+      `SELECT link, title FROM news_issues
+        WHERE is_negative IS NULL AND status != 'hidden'
+        ORDER BY published_at DESC
+        LIMIT ?`
+    )
+      .bind(BACKFILL_LIMIT)
+      .all();
+    await classifyAndPersist(env, pending);
+  } catch (err) {
+    console.error("미판정 뉴스 백필 조회 실패 — 이번 배치 백필 건너뜀:", err);
   }
 
   const nextCursor = state.cursor_pos + batchSize;

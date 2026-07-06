@@ -19,6 +19,9 @@ CREATE TABLE wetlands (
 
 -- 습지별 뉴스 이슈 테이블 (뉴스 본문은 저장하지 않고 링크만 보관 — 저작권)
 -- status: 'unreviewed' | 'confirmed' | 'hidden'
+-- is_negative: NULL=미판정, 0=일반, 1=부정보도(오염·훼손·불법행위·개발위협 등)
+-- negative_source: NULL | 'ai'(AI 자동 분류) | 'manual'(직원 수동 지정)
+-- ※ 기존 라이브 DB에는 이 스키마 대신 migrations/001-negative.sql만 적용할 것(데이터 보존).
 CREATE TABLE news_issues (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   wetland_id INTEGER REFERENCES wetlands(id),
@@ -27,12 +30,15 @@ CREATE TABLE news_issues (
   source TEXT,
   published_at TEXT,
   status TEXT NOT NULL DEFAULT 'unreviewed',
+  is_negative INTEGER,
+  negative_source TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE INDEX idx_news_issues_wetland_id ON news_issues(wetland_id);
 CREATE INDEX idx_news_issues_published_at ON news_issues(published_at);
 CREATE INDEX idx_news_issues_status ON news_issues(status);
+CREATE INDEX idx_news_issues_is_negative ON news_issues(is_negative);
 CREATE INDEX idx_wetlands_priority ON wetlands(priority);
 
 -- 뉴스 수집 진행 상태 (배치 수집 커서/진행률 — 항상 1행만 사용)

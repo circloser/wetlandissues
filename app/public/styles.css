@@ -19,6 +19,9 @@
   --color-success-bg: #e6f8ee;
   --color-success-text: #1a9e5c;
   --color-danger: #d64545;
+  --color-danger-strong: #c0392b; /* 부정 마커/뱃지 텍스트 — white 배경에서 WCAG AA 충족(5.9:1) */
+  --color-danger-soft: #fdeceb; /* 부정 뱃지 배경(옅은 빨강) */
+  --color-danger-border: #f0b4ae; /* 부정 뱃지 테두리 */
   --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
   --shadow-md: 0 4px 16px rgba(15, 23, 42, 0.08);
   --shadow-lg: 0 12px 32px rgba(15, 23, 42, 0.14);
@@ -471,6 +474,12 @@ button, input {
   box-shadow: 0 1px 3px rgba(15, 23, 42, 0.2);
 }
 
+/* 부정보도가 포함된 습지 마커 — 파랑 대신 빨강(크기 3단계 배경보다 뒤에 두어 덮어씀) */
+.wetland-marker.wetland-marker--negative {
+  background: var(--color-danger);
+  box-shadow: 0 2px 8px rgba(214, 69, 69, 0.4), 0 0 0 1px rgba(214, 69, 69, 0.2);
+}
+
 /* ------------------------------------------------------------------ */
 /* 습지명 라벨(툴팁) — issue_count>0이면 permanent:true로 상시 노출          */
 /* ------------------------------------------------------------------ */
@@ -534,6 +543,12 @@ button, input {
 .wetland-cluster.wetland-cluster--empty {
   background: #9aa4b2;
   box-shadow: 0 1px 4px rgba(15, 23, 42, 0.22);
+}
+
+/* 하위에 부정보도 습지가 있는 클러스터 — 집계 배지 색은 유지하고 빨간 테두리로 표시 */
+.wetland-cluster.wetland-cluster--negative {
+  border-color: var(--color-danger);
+  box-shadow: 0 2px 10px rgba(214, 69, 69, 0.34), 0 0 0 2px var(--color-danger);
 }
 
 /* ------------------------------------------------------------------ */
@@ -682,6 +697,26 @@ button, input {
   border-color: var(--color-primary);
 }
 
+/* "부정보도만" 토글 — 정렬 select 옆에 배치, 체크 시 accent 빨강 */
+.negative-filter-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--color-danger-strong);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.negative-filter-toggle input {
+  accent-color: var(--color-danger);
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
+}
+
 .panel-content {
   padding: 14px 20px 28px;
   overflow-y: auto;
@@ -771,6 +806,13 @@ button, input {
 .status-badge--confirmed {
   background: var(--color-success-bg);
   color: var(--color-success-text);
+}
+
+/* 부정보도 뱃지 — 빨간 계열로 강조(상태 뱃지 옆에 함께 노출) */
+.status-badge--negative {
+  background: var(--color-danger-soft);
+  color: var(--color-danger-strong);
+  border: 1px solid var(--color-danger-border);
 }
 
 .panel-loading,

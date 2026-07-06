@@ -21,6 +21,17 @@ function statusBadgeHtml(status) {
   return info ? `<span class="status-badge ${info.className}">${info.text}</span>` : "";
 }
 
+/**
+ * 부정보도 뱃지 HTML을 생성한다. is_negative가 1일 때만 빨간 "부정" 뱃지를 반환한다.
+ * @param {number|null} isNegative
+ * @returns {string}
+ */
+function negativeBadgeHtml(isNegative) {
+  return Number(isNegative) === 1
+    ? `<span class="status-badge status-badge--negative">부정</span>`
+    : "";
+}
+
 let map;
 let markersLayer;
 const markerByWetlandId = new Map();
@@ -45,6 +56,9 @@ const filterState = {
   from: null,
   to: null,
 };
+
+/** "부정보도만" 필터 활성화 여부. true면 GET /api/issues에 negative=1을 붙인다. */
+let negativeOnly = false;
 
 /* ------------------------------------------------------------------ */
 /* 분할선 드래그 (데스크톱: 지도/뉴스 패널 비율 조절)                        */
@@ -97,6 +111,7 @@ function init() {
   document.getElementById("panel-close-btn").addEventListener("click", closePanel);
   document.getElementById("panel-show-all-btn").addEventListener("click", showAllIssuesPanel);
   document.getElementById("issue-sort-select").addEventListener("change", onSortChange);
+  document.getElementById("negative-filter-checkbox").addEventListener("change", onNegativeFilterChange);
   document.getElementById("collect-btn").addEventListener("click", onCollectClick);
 
   initWetlandSearch();
@@ -162,6 +177,7 @@ function initBaseLayers() {
 function buildClusterIcon(cluster) {
   const childMarkers = cluster.getAllChildMarkers();
   const totalIssues = childMarkers.reduce((sum, marker) => sum + (marker.options.issueCount || 0), 0);
+  const totalNegative = childMarkers.reduce((sum, marker) => sum + (marker.options.negativeCount || 0), 0);
 
   let sizeClass = "wetland-cluster--sm";
   let size = 36;
@@ -174,10 +190,12 @@ function buildClusterIcon(cluster) {
   }
 
   const emptyClass = totalIssues === 0 ? " wetland-cluster--empty" : "";
+  // 하위에 부정보도 습지가 하나라도 있으면 빨간 테두리로 강조한다(집계 배지 색은 유지).
+  const negativeClass = totalNegative > 0 ? " wetland-cluster--negative" : "";
 
   return L.divIcon({
     className: "",
-    html: `<div class="wetland-cluster ${sizeClass}${emptyClass}">${totalIssues}</div>`,
+    html: `<div class="wetland-cluster ${sizeClass}${emptyClass}${negativeClass}">${totalIssues}</div>`,
     iconSize: [size, size],
     iconAnchor: [size / 2, size / 2],
   });
@@ -222,9 +240,11 @@ function renderMarkers(wetlands) {
 
   for (const wetland of wetlands) {
     const issueCount = Number(wetland.issue_count) || 0;
+    const negativeCount = Number(wetland.negative_count) || 0;
     const marker = L.marker([wetland.lat, wetland.lng], {
-      icon: buildWetlandIcon(issueCount),
+      icon: buildWetlandIcon(issueCount, negativeCount),
       issueCount, // 클러스터 배지 합산용(buildClusterIcon에서 getAllChildMarkers로 합산)
+      negativeCount, // 클러스터에 부정 습지 포함 여부 표시용(합산)
     });
 
     marker.bindTooltip(wetland.name, {
@@ -241,15 +261,19 @@ function renderMarkers(wetlands) {
 }
 
 /**
- * 이슈 건수에 따라 커스텀 divIcon을 생성한다.
- * issue_count가 0이면 회색 작은 마커, 그 외에는 파란 원형 배지에 숫자를 표시한다.
+ * 이슈 건수에 따라 커스텀 divIcon을 생성한다. 3색 체계:
+ *  - issue_count가 0이면 회색 작은 마커,
+ *  - negative_count>0(부정보도 포함)이면 빨간 원형 배지,
+ *  - 그 외(일반 이슈만)이면 파란 원형 배지에 숫자를 표시한다.
  * 건수 구간별로 배지 크기를 키워 지도 위에서 이슈 밀집도를 직관적으로 파악할 수 있게 한다:
- * 1~4건 소형, 5~9건 중형, 10건 이상 대형.
+ * 1~4건 소형, 5~9건 중형, 10건 이상 대형(크기 3단계는 색과 무관하게 유지).
  * @param {number} issueCount
+ * @param {number} [negativeCount=0]
  * @returns {L.DivIcon}
  */
-function buildWetlandIcon(issueCount) {
+function buildWetlandIcon(issueCount, negativeCount = 0) {
   const count = Number(issueCount) || 0;
+  const negative = Number(negativeCount) || 0;
 
   if (count === 0) {
     return L.divIcon({
@@ -270,9 +294,11 @@ function buildWetlandIcon(issueCount) {
     size = 32;
   }
 
+  const negativeClass = negative > 0 ? " wetland-marker--negative" : "";
+
   return L.divIcon({
     className: "",
-    html: `<div class="wetland-marker ${sizeClass}">${count}</div>`,
+    html: `<div class="wetland-marker ${sizeClass}${negativeClass}">${count}</div>`,
     iconSize: [size, size],
     iconAnchor: [size / 2, size / 2],
   });
@@ -314,6 +340,16 @@ async function onSortChange() {
 }
 
 /**
+ * "부정보도만" 체크박스 변경 핸들러: negativeOnly 상태를 갱신하고 현재 모드로 재조회한다.
+ * 전체/습지 두 모드 모두에서 동작한다(loadIssues가 negativeOnly면 negative=1을 붙인다).
+ */
+async function onNegativeFilterChange() {
+  const checkbox = document.getElementById("negative-filter-checkbox");
+  negativeOnly = checkbox.checked;
+  await loadIssues();
+}
+
+/**
  * 패널 헤더(제목 + [전체 보기] 버튼 표시 여부)를 현재 viewMode에 맞게 갱신한다.
  */
 function updatePanelHeader() {
@@ -344,6 +380,7 @@ async function loadIssues() {
   params.set("sort", currentSort);
   if (filterState.from) params.set("from", filterState.from);
   if (filterState.to) params.set("to", filterState.to);
+  if (negativeOnly) params.set("negative", "1");
 
   try {
     const res = await fetch(`/api/issues?${params.toString()}`);
@@ -391,6 +428,7 @@ function buildIssueListItem(issue) {
   li.dataset.issueId = issue.id;
 
   const confirmBtnLabel = issue.status === "confirmed" ? "미점검으로" : "확인";
+  const negativeBtnLabel = Number(issue.is_negative) === 1 ? "부정 해제" : "부정 지정";
   const wetlandBadgeHtml =
     viewMode === "all" && issue.wetland_name
       ? `<span class="issue-wetland-badge" data-wetland-id="${escapeHtml(String(issue.wetland_id))}">${escapeHtml(issue.wetland_name)}</span>`
@@ -403,10 +441,12 @@ function buildIssueListItem(issue) {
       <span>${escapeHtml(issue.source || "출처 미상")}</span>
       <span>·</span>
       <span>${escapeHtml(formatDate(issue.published_at))}</span>
+      <span class="issue-negative-badge">${negativeBadgeHtml(issue.is_negative)}</span>
       <span class="issue-status-badge">${statusBadgeHtml(issue.status)}</span>
     </div>
     <div class="issue-actions">
       <button type="button" class="issue-action-btn issue-action-confirm">${confirmBtnLabel}</button>
+      <button type="button" class="issue-action-btn issue-action-negative">${negativeBtnLabel}</button>
       <button type="button" class="issue-action-btn issue-action-reassign">습지 수정</button>
       <button type="button" class="issue-action-btn issue-action-hide">숨김</button>
     </div>
@@ -418,6 +458,7 @@ function buildIssueListItem(issue) {
   `;
 
   li.querySelector(".issue-action-confirm").addEventListener("click", () => onConfirmToggleClick(issue, li));
+  li.querySelector(".issue-action-negative").addEventListener("click", () => onNegativeToggleClick(issue, li));
   li.querySelector(".issue-action-hide").addEventListener("click", () => onHideClick(issue, li));
   li.querySelector(".issue-action-reassign").addEventListener("click", () => onReassignClick(issue, li));
   li.querySelector(".issue-action-reassign-cancel").addEventListener("click", () => toggleReassignForm(li, false));
@@ -461,6 +502,32 @@ async function onConfirmToggleClick(issue, li) {
     btn.textContent = updated.status === "confirmed" ? "미점검으로" : "확인";
   } catch (err) {
     showToast(`상태 변경에 실패했습니다: ${err.message}`, true);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+/**
+ * [부정 지정]/[부정 해제] 토글 버튼 클릭 핸들러: is_negative를 1 <-> 0 으로 전환한다.
+ * 성공 시 뱃지/버튼 라벨을 즉시 갱신하고, loadWetlands()로 마커의 부정 건수도 다시 반영한다.
+ * @param {object} issue
+ * @param {HTMLLIElement} li
+ */
+async function onNegativeToggleClick(issue, li) {
+  const nextNegative = Number(issue.is_negative) === 1 ? 0 : 1;
+  const btn = li.querySelector(".issue-action-negative");
+  btn.disabled = true;
+
+  try {
+    const updated = await patchIssue(issue.id, { is_negative: nextNegative });
+    issue.is_negative = updated.is_negative;
+    issue.negative_source = updated.negative_source;
+
+    li.querySelector(".issue-negative-badge").innerHTML = negativeBadgeHtml(updated.is_negative);
+    btn.textContent = Number(updated.is_negative) === 1 ? "부정 해제" : "부정 지정";
+    await loadWetlands();
+  } catch (err) {
+    showToast(`부정 지정 변경에 실패했습니다: ${err.message}`, true);
   } finally {
     btn.disabled = false;
   }

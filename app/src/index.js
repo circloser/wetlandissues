@@ -222,9 +222,10 @@ function parseDateRangeParams(url) {
 /**
  * GET /api/wetlands
  * D1에서 습지 목록을 이름순으로 조회하여 JSON으로 반환한다.
- * 습지별 issue_count(숨김 제외 뉴스 건수)를 서브쿼리로 함께 반환한다.
+ * 습지별 issue_count(숨김 제외 뉴스 건수)와 negative_count(그 중 부정보도 건수)를
+ * 서브쿼리로 함께 반환한다.
  * from/to 쿼리 파라미터(YYYY-MM-DD)가 있으면 해당 기간(published_at 기준, from 00:00:00 ~
- * to 23:59:59) 내 뉴스만 issue_count에 반영한다. 형식이 올바르지 않으면 무시한다.
+ * to 23:59:59) 내 뉴스만 두 카운트에 반영한다. 형식이 올바르지 않으면 무시한다.
  */
 async function handleGetWetlands(request, env) {
   try {
@@ -245,15 +246,19 @@ async function handleGetWetlands(request, env) {
 
     const dateWhereSql = dateConditions.length > 0 ? ` AND ${dateConditions.join(" AND ")}` : "";
 
+    // issue_count(전체 뉴스)와 negative_count(부정보도만) 서브쿼리는 동일한 숨김 제외 +
+    // 기간 필터 조건을 쓰므로, 두 서브쿼리 모두에 dateBindings를 순서대로 두 번 바인딩한다.
     const { results } = await env.DB.prepare(
       `SELECT
          w.*,
          (SELECT COUNT(*) FROM news_issues n
-            WHERE n.wetland_id = w.id AND n.status != 'hidden'${dateWhereSql}) AS issue_count
+            WHERE n.wetland_id = w.id AND n.status != 'hidden'${dateWhereSql}) AS issue_count,
+         (SELECT COUNT(*) FROM news_issues n
+            WHERE n.wetland_id = w.id AND n.status != 'hidden' AND n.is_negative = 1${dateWhereSql}) AS negative_count
        FROM wetlands w
        ORDER BY w.name`
     )
-      .bind(...dateBindings)
+      .bind(...dateBindings, ...dateBindings)
       .all();
 
     return json(results);
@@ -304,9 +309,11 @@ function resolveIssueLimit(limitRaw) {
 }
 
 /**
- * GET /api/issues?wetland_id=&from=&to=&sort=&limit=
+ * GET /api/issues?wetland_id=&from=&to=&sort=&limit=&negative=
  * 뉴스 목록을 반환한다 (숨김 상태 제외). wetland_id는 선택 파라미터로, 지정하면 해당
  * 습지의 뉴스만, 없으면 전체 습지의 뉴스를 반환한다(이 경우 wetland_name 포함).
+ * negative=1 이면 부정보도(is_negative=1)만 필터링한다(그 외 값은 무시).
+ * 반환 필드에 is_negative(NULL|0|1), negative_source(NULL|'ai'|'manual')가 포함된다.
  * - sort: newest(기본, 최신순) | oldest(오래된순) | wetland(습지명 가나다순, 같은 습지 내 최신순)
  *   | status(미점검 먼저, 그 안에서 최신순). 화이트리스트 외 값은 newest로 처리.
  * - limit: 기본 100, 최대 300.
@@ -328,6 +335,10 @@ async function handleGetIssues(request, env) {
       conditions.push("n.wetland_id = ?");
       bindings.push(wetlandId);
     }
+    // negative=1 이면 부정보도(is_negative=1)만 반환한다. 그 외 값은 무시(전체 반환).
+    if (url.searchParams.get("negative") === "1") {
+      conditions.push("n.is_negative = 1");
+    }
     if (from) {
       conditions.push("n.published_at >= ?");
       bindings.push(`${from} 00:00:00`);
@@ -340,7 +351,8 @@ async function handleGetIssues(request, env) {
     bindings.push(limit);
 
     const { results } = await env.DB.prepare(
-      `SELECT n.id, n.wetland_id, n.title, n.link, n.source, n.published_at, n.status, w.name AS wetland_name
+      `SELECT n.id, n.wetland_id, n.title, n.link, n.source, n.published_at, n.status,
+              n.is_negative, n.negative_source, w.name AS wetland_name
        FROM news_issues n
        JOIN wetlands w ON w.id = n.wetland_id
        WHERE ${conditions.join(" AND ")}
@@ -360,8 +372,9 @@ const VALID_ISSUE_STATUSES = ["confirmed", "hidden", "unreviewed"];
 
 /**
  * PATCH /api/issues/{id}
- * 뉴스 이슈의 점검 상태(status) 또는 소속 습지(wetland_id)를 갱신한다.
+ * 뉴스 이슈의 점검 상태(status) / 소속 습지(wetland_id) / 부정보도 여부(is_negative)를 갱신한다.
  * body: { "status": "confirmed"|"hidden"|"unreviewed" } 와/또는 { "wetland_id": <id> }
+ *       와/또는 { "is_negative": 0|1 } (직원 수동 지정 — 갱신 시 negative_source='manual'로 함께 기록)
  */
 async function handlePatchIssue(request, env, issueId) {
   try {
@@ -372,14 +385,18 @@ async function handlePatchIssue(request, env, issueId) {
       return json({ error: "요청 본문이 올바른 JSON이 아닙니다." }, 400);
     }
 
-    const { status, wetland_id } = body || {};
+    const { status, wetland_id, is_negative } = body || {};
 
-    if (status === undefined && wetland_id === undefined) {
-      return json({ error: "status 또는 wetland_id 중 하나 이상이 필요합니다." }, 400);
+    if (status === undefined && wetland_id === undefined && is_negative === undefined) {
+      return json({ error: "status, wetland_id, is_negative 중 하나 이상이 필요합니다." }, 400);
     }
 
     if (status !== undefined && !VALID_ISSUE_STATUSES.includes(status)) {
       return json({ error: "status는 'confirmed', 'hidden', 'unreviewed' 중 하나여야 합니다." }, 400);
+    }
+
+    if (is_negative !== undefined && is_negative !== 0 && is_negative !== 1) {
+      return json({ error: "is_negative는 0 또는 1이어야 합니다." }, 400);
     }
 
     if (wetland_id !== undefined) {
@@ -405,6 +422,13 @@ async function handlePatchIssue(request, env, issueId) {
       bindings.push(wetland_id);
     }
 
+    // 직원이 수동으로 부정 여부를 지정하면 출처를 'manual'로 남겨 AI 판정과 구분한다.
+    if (is_negative !== undefined) {
+      setClauses.push("is_negative = ?");
+      bindings.push(is_negative);
+      setClauses.push("negative_source = 'manual'");
+    }
+
     bindings.push(issueId);
 
     const updateResult = await env.DB.prepare(
@@ -418,7 +442,7 @@ async function handlePatchIssue(request, env, issueId) {
     }
 
     const updatedRow = await env.DB.prepare(
-      `SELECT id, wetland_id, title, link, source, published_at, status
+      `SELECT id, wetland_id, title, link, source, published_at, status, is_negative, negative_source
        FROM news_issues WHERE id = ?`
     )
       .bind(issueId)
