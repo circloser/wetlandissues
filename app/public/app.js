@@ -195,7 +195,7 @@ function init() {
 
   document.getElementById("panel-close-btn").addEventListener("click", closePanel);
   document.getElementById("panel-show-all-btn").addEventListener("click", showAllIssuesPanel);
-  document.getElementById("wetland-clear-btn").addEventListener("click", showAllIssuesPanel);
+  document.getElementById("wetland-clear-btn").addEventListener("click", clearWetlandSelection);
   document.getElementById("issue-sort-select").addEventListener("change", onSortChange);
   document.getElementById("negative-filter-checkbox").addEventListener("change", onNegativeFilterChange);
   document.getElementById("collect-btn").addEventListener("click", onCollectClick);
@@ -640,6 +640,17 @@ async function showAllIssuesPanel() {
   updatePanelHeader();
   // 전체 보기로 돌아올 때 지도도 전국 화면으로 복귀한다.
   fitKorea();
+  await loadIssues();
+}
+
+/**
+ * 습지 선택 해제(제목 옆 X 버튼): 목록만 전체 뉴스로 되돌리고 지도는 현재 위치·배율 그대로
+ * 둔다(전국 화면으로 되돌아가지 않음 — 사용자 요청).
+ */
+async function clearWetlandSelection() {
+  viewMode = "all";
+  currentWetland = null;
+  updatePanelHeader();
   await loadIssues();
 }
 
