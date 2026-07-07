@@ -242,9 +242,10 @@ async function handleCollectSingleWetland(request, env, wetlandIdRaw) {
 
 /**
  * PATCH /api/wetlands/{id}
- * 습지 이름을 수정한다(직원이 잘못된 이름을 바로잡는 용도, 전 직원 공유).
- * body: { "name": "새 습지 이름" }. 이름은 1~100자, 공백 트림.
- * 대상 습지가 없으면 404. 성공 시 갱신된 { id, name } 반환.
+ * 습지 이름/위치를 수정한다(직원이 잘못된 정보를 바로잡는 용도, 전 직원 공유).
+ * body: { "name"?: "새 이름", "lat"?: 위도, "lng"?: 경도 } — 셋 중 하나 이상.
+ * 이름은 1~100자, 위도/경도는 한반도 범위(위도 32~40, 경도 123~133)로 검증.
+ * 대상 습지가 없으면 404. 성공 시 갱신된 필드를 반환.
  */
 async function handlePatchWetland(request, env, wetlandIdRaw) {
   try {
@@ -257,25 +258,51 @@ async function handlePatchWetland(request, env, wetlandIdRaw) {
       return json({ error: "요청 본문이 올바른 JSON이 아닙니다." }, 400);
     }
 
-    const name = typeof body.name === "string" ? body.name.trim() : "";
-    if (!name) {
-      return json({ error: "습지 이름을 입력해 주세요." }, 400);
-    }
-    if (name.length > 100) {
-      return json({ error: "습지 이름은 100자 이하여야 합니다." }, 400);
+    const setClauses = [];
+    const bindings = [];
+    const updated = { id: wetlandId };
+
+    if (body.name !== undefined) {
+      const name = typeof body.name === "string" ? body.name.trim() : "";
+      if (!name) return json({ error: "습지 이름을 입력해 주세요." }, 400);
+      if (name.length > 100) return json({ error: "습지 이름은 100자 이하여야 합니다." }, 400);
+      setClauses.push("name = ?");
+      bindings.push(name);
+      updated.name = name;
     }
 
-    const result = await env.DB.prepare("UPDATE wetlands SET name = ? WHERE id = ?")
-      .bind(name, wetlandId)
+    if (body.lat !== undefined || body.lng !== undefined) {
+      const lat = Number(body.lat);
+      const lng = Number(body.lng);
+      // 한반도 범위(여유 포함)로 검증해 실수로 엉뚱한 좌표가 저장되는 것을 막는다.
+      if (!Number.isFinite(lat) || lat < 32 || lat > 40) {
+        return json({ error: "위도가 한반도 범위(32~40)를 벗어났습니다." }, 400);
+      }
+      if (!Number.isFinite(lng) || lng < 123 || lng > 133) {
+        return json({ error: "경도가 한반도 범위(123~133)를 벗어났습니다." }, 400);
+      }
+      setClauses.push("lat = ?", "lng = ?");
+      bindings.push(lat, lng);
+      updated.lat = lat;
+      updated.lng = lng;
+    }
+
+    if (setClauses.length === 0) {
+      return json({ error: "수정할 항목(name 또는 lat/lng)이 없습니다." }, 400);
+    }
+
+    bindings.push(wetlandId);
+    const result = await env.DB.prepare(`UPDATE wetlands SET ${setClauses.join(", ")} WHERE id = ?`)
+      .bind(...bindings)
       .run();
 
     if (!result.meta || result.meta.changes === 0) {
       return json({ error: "해당 습지를 찾을 수 없습니다." }, 404);
     }
 
-    return json({ id: wetlandId, name });
+    return json(updated);
   } catch (err) {
-    return json({ error: "습지 이름 수정 중 오류가 발생했습니다.", detail: String(err) }, 500);
+    return json({ error: "습지 정보 수정 중 오류가 발생했습니다.", detail: String(err) }, 500);
   }
 }
 

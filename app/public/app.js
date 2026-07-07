@@ -37,6 +37,8 @@ let markersLayer;
 const markerByWetlandId = new Map();
 let wetlandListCache = [];
 let currentWetland = null;
+/** 위치 수정 중 지도에 띄우는 드래그 가능한 임시 핀(Leaflet). 미사용 시 null. */
+let locationEditMarker = null;
 
 /** 뉴스 패널 모드: "all"(전체 최신 뉴스) 또는 "wetland"(선택한 습지만). */
 let viewMode = "all";
@@ -197,6 +199,9 @@ function init() {
   document.getElementById("panel-show-all-btn").addEventListener("click", showAllIssuesPanel);
   document.getElementById("wetland-clear-btn").addEventListener("click", clearWetlandSelection);
   document.getElementById("wetland-edit-btn").addEventListener("click", startWetlandNameEdit);
+  document.getElementById("wetland-loc-btn").addEventListener("click", startLocationEdit);
+  document.getElementById("location-save-btn").addEventListener("click", saveLocation);
+  document.getElementById("location-cancel-btn").addEventListener("click", cancelLocationEdit);
   document.getElementById("wetland-name-save-btn").addEventListener("click", saveWetlandName);
   document.getElementById("wetland-name-cancel-btn").addEventListener("click", cancelWetlandNameEdit);
   document.getElementById("wetland-name-input").addEventListener("keydown", (event) => {
@@ -744,8 +749,98 @@ async function saveWetlandName() {
 function setWetlandNameEditing(editing) {
   document.getElementById("panel-title").hidden = editing;
   document.getElementById("wetland-edit-btn").hidden = editing;
+  document.getElementById("wetland-loc-btn").hidden = editing;
   document.getElementById("wetland-clear-btn").hidden = editing;
   document.getElementById("wetland-name-edit").hidden = !editing;
+}
+
+/**
+ * 습지 위치 수정 시작(📍): 무료(OSM)/VWorld 지도에서만 가능. 해당 습지로 확대한 뒤
+ * 드래그 가능한 임시 핀을 띄우고, 지도 하단에 저장/취소 바를 보여준다.
+ */
+function startLocationEdit() {
+  if (!currentWetland) return;
+
+  // 위치 수정은 Leaflet 기반 지도(무료/VWorld)에서만 지원한다(핀 드래그).
+  if (!(State.provider === "osm" || State.provider === "vworld") || !map) {
+    showToast("위치 수정은 무료 지도나 VWorld에서 가능해요. 좌상단 '지도'에서 전환하세요.", true);
+    return;
+  }
+  if (locationEditMarker) return; // 이미 수정 중
+
+  // 해당 습지로 확대해 핀을 정확히 놓기 쉽게 한다.
+  map.setView([currentWetland.lat, currentWetland.lng], 15, { animate: true });
+
+  locationEditMarker = L.marker([currentWetland.lat, currentWetland.lng], {
+    draggable: true,
+    autoPan: true,
+    zIndexOffset: 2000,
+    icon: L.divIcon({
+      className: "",
+      html: '<div class="location-pin" title="드래그해서 옮기세요">📍</div>',
+      iconSize: [34, 34],
+      iconAnchor: [17, 32],
+    }),
+  }).addTo(map);
+
+  document.getElementById("location-edit-bar").hidden = false;
+}
+
+/**
+ * 위치 저장: 드래그한 핀의 좌표를 PATCH /api/wetlands/{id}로 서버(전 직원 공유)에 반영하고,
+ * 성공 시 지도 마커/라벨·검색 캐시를 갱신한다.
+ */
+async function saveLocation() {
+  if (!currentWetland || !locationEditMarker) return;
+
+  const pos = locationEditMarker.getLatLng();
+  const saveBtn = document.getElementById("location-save-btn");
+  saveBtn.disabled = true;
+  try {
+    const res = await fetch(`/api/wetlands/${encodeURIComponent(currentWetland.id)}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ lat: pos.lat, lng: pos.lng }),
+    });
+    if (!res.ok) {
+      let message = `HTTP ${res.status}`;
+      try {
+        const data = await res.json();
+        if (data && data.error) message = data.error;
+      } catch {
+        /* 기본 메시지 사용 */
+      }
+      throw new Error(message);
+    }
+
+    currentWetland.lat = pos.lat;
+    currentWetland.lng = pos.lng;
+    endLocationEdit();
+    await loadWetlands(); // 지도 마커/라벨·검색 캐시를 새 위치로 갱신
+    showToast("습지 위치를 수정했습니다.");
+  } catch (err) {
+    showToast(`위치 수정에 실패했습니다: ${err.message}`, true);
+  } finally {
+    saveBtn.disabled = false;
+  }
+}
+
+/** 위치 수정 취소: 임시 핀과 안내 바를 정리한다(좌표 변경 없음). */
+function cancelLocationEdit() {
+  endLocationEdit();
+}
+
+/** 위치 수정 임시 핀·안내 바를 제거한다(저장/취소 공통 정리). */
+function endLocationEdit() {
+  if (locationEditMarker && map) {
+    try {
+      map.removeLayer(locationEditMarker);
+    } catch (e) {
+      /* 이미 제거됨 */
+    }
+  }
+  locationEditMarker = null;
+  document.getElementById("location-edit-bar").hidden = true;
 }
 
 /**
@@ -775,19 +870,23 @@ function updatePanelHeader() {
   const showAllBtn = document.getElementById("panel-show-all-btn");
   const clearBtn = document.getElementById("wetland-clear-btn");
   const editBtn = document.getElementById("wetland-edit-btn");
+  const locBtn = document.getElementById("wetland-loc-btn");
 
-  // 헤더를 다시 그릴 때 이름 수정 모드는 항상 종료 상태로 되돌린다(제목 노출, 입력칸 숨김).
+  // 헤더를 다시 그릴 때 이름/위치 수정 모드는 항상 종료 상태로 되돌린다.
   document.getElementById("wetland-name-edit").hidden = true;
   titleEl.hidden = false;
+  endLocationEdit();
 
   if (viewMode === "wetland" && currentWetland) {
     titleEl.textContent = currentWetland.name;
     clearBtn.hidden = false;
-    editBtn.hidden = false; // 습지 모드에서만 이름 수정(✏️) 가능
+    editBtn.hidden = false; // 습지 모드에서만 이름(✏️)/위치(📍) 수정 가능
+    locBtn.hidden = false;
   } else {
     titleEl.textContent = "전체 최신 뉴스";
     clearBtn.hidden = true;
     editBtn.hidden = true;
+    locBtn.hidden = true;
   }
 
   // [전체 보기]는 항상 노출한다 — 어느 상태(습지 선택/✕로 해제 후 확대된 지도 등)에서든

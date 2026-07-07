@@ -124,6 +124,13 @@
 
       <!-- 키 없는 제공사 선택 시 지도 위에 표시하는 안내 오버레이(앱은 죽지 않음). -->
       <div id="map-overlay" class="map-overlay" hidden></div>
+
+      <!-- 습지 위치 수정 안내 바(핀 드래그 중 표시). -->
+      <div id="location-edit-bar" class="location-edit-bar" hidden>
+        <span class="location-edit-text">📍 핀을 올바른 위치로 드래그한 뒤 저장하세요</span>
+        <button id="location-save-btn" class="location-save-btn" type="button">저장</button>
+        <button id="location-cancel-btn" class="location-cancel-btn" type="button">취소</button>
+      </div>
     </div>
 
     <div id="split-handle" class="split-handle" role="separator" aria-orientation="vertical" aria-label="지도·뉴스 패널 크기 조절" tabindex="0"></div>
@@ -133,6 +140,7 @@
       <div class="panel-header">
         <h2 id="panel-title" class="panel-title">전체 최신 뉴스</h2>
         <button id="wetland-edit-btn" class="wetland-edit-btn" type="button" aria-label="습지 이름 수정" title="습지 이름 수정" hidden>✏️</button>
+        <button id="wetland-loc-btn" class="wetland-edit-btn" type="button" aria-label="습지 위치 수정" title="습지 위치 수정 (핀 드래그)" hidden>📍</button>
         <button id="wetland-clear-btn" class="wetland-clear-btn" type="button" aria-label="습지 선택 해제" title="습지 선택 해제 (전체 뉴스로)" hidden>✕</button>
         <span id="wetland-name-edit" class="wetland-name-edit" hidden>
           <input id="wetland-name-input" class="wetland-name-input" type="text" maxlength="100" aria-label="습지 이름" />
