@@ -1964,10 +1964,13 @@ function loadMapScript(src, timeoutMs = 12000) {
   });
 }
 
-// 네이버 지도 SDK는 키/도메인 인증 실패 시 이 전역 콜백을 비동기로 호출한다.
-// 정의해 두지 않으면 지도가 조용히 깨진 채 멈춘 것처럼 보이므로, 안내 오버레이로 알린다.
+// 네이버 지도 SDK는 키/도메인 인증 실패 시 이 전역 콜백을 비동기로(때로는 반복) 호출한다.
+// 이 콜백이 사용자가 다른 지도로 전환한 뒤에 뒤늦게 실행되면 OSM/VWorld/구글 지도 위에
+// "네이버 인증 실패" 오버레이를 다시 덮어 "다른 지도가 로드되지 않는" 것처럼 보인다.
+// 따라서 현재 제공사가 네이버일 때만 안내하고, 아니면 무시한다.
 window.navermap_authFailure = function () {
   try {
+    if (typeof State !== "undefined" && State.provider !== "naver") return;
     showMapOverlay("네이버 지도 인증 실패 — 키(ncpKeyId)와 등록 도메인을 확인하세요.");
   } catch (e) {
     /* showMapOverlay 준비 전이면 무시 */
