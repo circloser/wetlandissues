@@ -877,6 +877,87 @@ button, input {
   border-top-color: var(--color-primary);
 }
 
+/* 습지 이름 수정 ✏️ 버튼 — 습지명 오른쪽. 클릭 시 인라인 입력칸으로 전환. */
+.wetland-edit-btn {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 50%;
+  background: var(--color-surface-sub);
+  font-size: 0.78rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s var(--ease-toss);
+}
+
+.wetland-edit-btn:hover {
+  background: var(--color-primary-soft);
+}
+
+.wetland-edit-btn[hidden] {
+  display: none;
+}
+
+/* 습지 이름 인라인 수정 폼 (제목 자리에 대체 표시) */
+.wetland-name-edit {
+  flex: 1;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.wetland-name-edit[hidden] {
+  display: none;
+}
+
+.wetland-name-input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  border: 1.5px solid var(--color-primary);
+  border-radius: var(--radius-sm);
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.wetland-name-input:focus {
+  outline: none;
+}
+
+.wetland-name-save-btn,
+.wetland-name-cancel-btn {
+  flex-shrink: 0;
+  padding: 6px 10px;
+  min-height: 30px;
+  border-radius: 6px;
+  font-size: 0.76rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.wetland-name-save-btn {
+  border: 1.5px solid var(--color-primary);
+  background: var(--color-primary);
+  color: #ffffff;
+}
+
+.wetland-name-save-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.wetland-name-cancel-btn {
+  border: 1.5px solid var(--color-border-strong);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+}
+
 /* 습지 선택 해제 X 버튼 — 습지명 바로 오른쪽. 클릭 시 전체 뉴스로 돌아간다. */
 .wetland-clear-btn {
   flex-shrink: 0;

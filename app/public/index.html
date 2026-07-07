@@ -132,7 +132,13 @@
       <div class="side-panel-handle" aria-hidden="true"></div>
       <div class="panel-header">
         <h2 id="panel-title" class="panel-title">전체 최신 뉴스</h2>
+        <button id="wetland-edit-btn" class="wetland-edit-btn" type="button" aria-label="습지 이름 수정" title="습지 이름 수정" hidden>✏️</button>
         <button id="wetland-clear-btn" class="wetland-clear-btn" type="button" aria-label="습지 선택 해제" title="습지 선택 해제 (전체 뉴스로)" hidden>✕</button>
+        <span id="wetland-name-edit" class="wetland-name-edit" hidden>
+          <input id="wetland-name-input" class="wetland-name-input" type="text" maxlength="100" aria-label="습지 이름" />
+          <button id="wetland-name-save-btn" class="wetland-name-save-btn" type="button">저장</button>
+          <button id="wetland-name-cancel-btn" class="wetland-name-cancel-btn" type="button">취소</button>
+        </span>
         <span id="panel-collecting-indicator" class="panel-collecting-indicator" hidden>
           <span class="spinner spinner--sub" aria-hidden="true"></span>
           <span>최신 뉴스 확인 중...</span>

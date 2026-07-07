@@ -196,6 +196,17 @@ function init() {
   document.getElementById("panel-close-btn").addEventListener("click", closePanel);
   document.getElementById("panel-show-all-btn").addEventListener("click", showAllIssuesPanel);
   document.getElementById("wetland-clear-btn").addEventListener("click", clearWetlandSelection);
+  document.getElementById("wetland-edit-btn").addEventListener("click", startWetlandNameEdit);
+  document.getElementById("wetland-name-save-btn").addEventListener("click", saveWetlandName);
+  document.getElementById("wetland-name-cancel-btn").addEventListener("click", cancelWetlandNameEdit);
+  document.getElementById("wetland-name-input").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      saveWetlandName();
+    } else if (event.key === "Escape") {
+      cancelWetlandNameEdit();
+    }
+  });
   document.getElementById("issue-sort-select").addEventListener("change", onSortChange);
   document.getElementById("negative-filter-checkbox").addEventListener("change", onNegativeFilterChange);
   document.getElementById("collect-btn").addEventListener("click", onCollectClick);
@@ -659,6 +670,85 @@ async function clearWetlandSelection() {
 }
 
 /**
+ * 습지 이름 수정 시작(제목 옆 ✏️): 제목/버튼을 감추고 현재 이름이 채워진 입력칸을 연다.
+ */
+function startWetlandNameEdit() {
+  if (!currentWetland) return;
+  const input = document.getElementById("wetland-name-input");
+  input.value = currentWetland.name;
+  setWetlandNameEditing(true);
+  input.focus();
+  input.select();
+}
+
+/**
+ * 습지 이름 수정 취소: 입력칸을 닫고 제목을 원래대로 보여준다.
+ */
+function cancelWetlandNameEdit() {
+  setWetlandNameEditing(false);
+}
+
+/**
+ * 습지 이름 저장: PATCH /api/wetlands/{id}로 서버(전 직원 공유)에 반영하고,
+ * 성공 시 제목·지도 마커/라벨·검색 캐시를 모두 갱신한다.
+ */
+async function saveWetlandName() {
+  if (!currentWetland) return;
+  const input = document.getElementById("wetland-name-input");
+  const newName = input.value.trim();
+
+  if (!newName) {
+    showToast("습지 이름을 입력해 주세요.", true);
+    return;
+  }
+  if (newName === currentWetland.name) {
+    setWetlandNameEditing(false);
+    return;
+  }
+
+  const saveBtn = document.getElementById("wetland-name-save-btn");
+  saveBtn.disabled = true;
+  try {
+    const res = await fetch(`/api/wetlands/${encodeURIComponent(currentWetland.id)}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: newName }),
+    });
+    if (!res.ok) {
+      let message = `HTTP ${res.status}`;
+      try {
+        const data = await res.json();
+        if (data && data.error) message = data.error;
+      } catch {
+        /* 기본 메시지 사용 */
+      }
+      throw new Error(message);
+    }
+
+    currentWetland.name = newName;
+    setWetlandNameEditing(false);
+    updatePanelHeader(); // 제목 갱신
+    await loadWetlands(); // 지도 마커/라벨·검색 캐시 갱신(서버 최신 이름 반영)
+    showToast("습지 이름을 수정했습니다.");
+  } catch (err) {
+    showToast(`이름 수정에 실패했습니다: ${err.message}`, true);
+  } finally {
+    saveBtn.disabled = false;
+  }
+}
+
+/**
+ * 이름 수정 모드 On/Off — 제목·✏️·✕는 감추고 입력칸을 보이거나 그 반대로 전환한다.
+ * @param {boolean} editing
+ */
+function setWetlandNameEditing(editing) {
+  document.getElementById("panel-title").hidden = editing;
+  document.getElementById("wetland-edit-btn").hidden = editing;
+  document.getElementById("wetland-clear-btn").hidden = editing;
+  document.getElementById("wetland-name-edit").hidden = !editing;
+}
+
+/**
  * 정렬 select 변경 핸들러: 즉시 현재 모드로 목록을 재조회한다.
  */
 async function onSortChange() {
@@ -684,13 +774,20 @@ function updatePanelHeader() {
   const titleEl = document.getElementById("panel-title");
   const showAllBtn = document.getElementById("panel-show-all-btn");
   const clearBtn = document.getElementById("wetland-clear-btn");
+  const editBtn = document.getElementById("wetland-edit-btn");
+
+  // 헤더를 다시 그릴 때 이름 수정 모드는 항상 종료 상태로 되돌린다(제목 노출, 입력칸 숨김).
+  document.getElementById("wetland-name-edit").hidden = true;
+  titleEl.hidden = false;
 
   if (viewMode === "wetland" && currentWetland) {
     titleEl.textContent = currentWetland.name;
     clearBtn.hidden = false;
+    editBtn.hidden = false; // 습지 모드에서만 이름 수정(✏️) 가능
   } else {
     titleEl.textContent = "전체 최신 뉴스";
     clearBtn.hidden = true;
+    editBtn.hidden = true;
   }
 
   // [전체 보기]는 항상 노출한다 — 어느 상태(습지 선택/✕로 해제 후 확대된 지도 등)에서든

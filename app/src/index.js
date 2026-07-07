@@ -47,6 +47,11 @@ export default {
       return handleCollectSingleWetland(request, env, wetlandCollectMatch[1]);
     }
 
+    const wetlandPatchMatch = url.pathname.match(/^\/api\/wetlands\/(\d+)$/);
+    if (wetlandPatchMatch && request.method === "PATCH") {
+      return handlePatchWetland(request, env, wetlandPatchMatch[1]);
+    }
+
     const issuePatchMatch = url.pathname.match(/^\/api\/issues\/(\d+)$/);
     if (issuePatchMatch && request.method === "PATCH") {
       return handlePatchIssue(request, env, issuePatchMatch[1]);
@@ -232,6 +237,45 @@ async function handleCollectSingleWetland(request, env, wetlandIdRaw) {
     return json(result);
   } catch (err) {
     return json({ error: "습지 단건 수집 중 오류가 발생했습니다.", detail: String(err) }, 500);
+  }
+}
+
+/**
+ * PATCH /api/wetlands/{id}
+ * 습지 이름을 수정한다(직원이 잘못된 이름을 바로잡는 용도, 전 직원 공유).
+ * body: { "name": "새 습지 이름" }. 이름은 1~100자, 공백 트림.
+ * 대상 습지가 없으면 404. 성공 시 갱신된 { id, name } 반환.
+ */
+async function handlePatchWetland(request, env, wetlandIdRaw) {
+  try {
+    const wetlandId = Number(wetlandIdRaw);
+
+    let body;
+    try {
+      body = await request.json();
+    } catch {
+      return json({ error: "요청 본문이 올바른 JSON이 아닙니다." }, 400);
+    }
+
+    const name = typeof body.name === "string" ? body.name.trim() : "";
+    if (!name) {
+      return json({ error: "습지 이름을 입력해 주세요." }, 400);
+    }
+    if (name.length > 100) {
+      return json({ error: "습지 이름은 100자 이하여야 합니다." }, 400);
+    }
+
+    const result = await env.DB.prepare("UPDATE wetlands SET name = ? WHERE id = ?")
+      .bind(name, wetlandId)
+      .run();
+
+    if (!result.meta || result.meta.changes === 0) {
+      return json({ error: "해당 습지를 찾을 수 없습니다." }, 404);
+    }
+
+    return json({ id: wetlandId, name });
+  } catch (err) {
+    return json({ error: "습지 이름 수정 중 오류가 발생했습니다.", detail: String(err) }, 500);
   }
 }
 
