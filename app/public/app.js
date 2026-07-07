@@ -1659,8 +1659,19 @@ async function onProviderChange() {
 
   const prevAdapter = adapter();
   // 현재 center/zoom을 캡처해 새 제공사가 같은 위치로 열리게 한다.
-  State.pendingView = prevAdapter && prevAdapter.ready ? prevAdapter.getView() : null;
-  if (prevAdapter && prevAdapter.ready) prevAdapter.reset();
+  // 인증 실패 등으로 이전 지도(특히 네이버)가 깨져 있으면 getView()/reset()이 예외를
+  // 던질 수 있는데, 그 예외가 전환 자체를 중단시켜 "다른 지도를 눌러도 안 바뀌는" 문제가
+  // 생긴다. 따라서 이전 지도 정리는 실패해도 전환을 계속하도록 try/catch로 격리한다.
+  try {
+    State.pendingView = prevAdapter && prevAdapter.ready ? prevAdapter.getView() : null;
+  } catch (e) {
+    State.pendingView = null;
+  }
+  try {
+    if (prevAdapter && prevAdapter.ready) prevAdapter.reset();
+  } catch (e) {
+    console.error("이전 지도 정리 중 오류(무시하고 전환 계속):", e);
+  }
 
   State.provider = nextProvider;
   localStorage.setItem(PROVIDER_STORAGE_KEY, nextProvider);
