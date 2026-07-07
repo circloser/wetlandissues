@@ -404,6 +404,11 @@ button, input {
   animation: spin 0.7s linear infinite;
 }
 
+/* display: inline-block가 hidden 속성을 덮어써 스피너가 항상 도는 것을 방지 */
+.spinner[hidden] {
+  display: none;
+}
+
 @keyframes spin {
   to {
     transform: rotate(360deg);
