@@ -71,6 +71,19 @@
   <main class="app-main">
     <div id="map-pane" class="map-pane">
       <div id="map"></div>
+
+      <!-- 제공사 공통 지도 컨트롤(우상단): 지도 종류 + 지적편집도 토글. -->
+      <div id="map-controls" class="map-controls">
+        <select id="map-type-select" class="map-type-select" aria-label="지도 종류">
+          <option value="roadmap">일반</option>
+          <option value="satellite">위성</option>
+          <option value="hybrid">하이브리드</option>
+        </select>
+        <button id="cadastral-btn" class="cadastral-btn" type="button" aria-pressed="false" hidden>지적편집도</button>
+      </div>
+
+      <!-- 키 없는 제공사 선택 시 지도 위에 표시하는 안내 오버레이(앱은 죽지 않음). -->
+      <div id="map-overlay" class="map-overlay" hidden></div>
     </div>
 
     <div id="split-handle" class="split-handle" role="separator" aria-orientation="vertical" aria-label="지도·뉴스 패널 크기 조절" tabindex="0"></div>
@@ -116,6 +129,17 @@
       </div>
       <div class="modal-body">
         <div class="settings-field">
+          <label class="settings-label" for="settings-provider-select">지도 제공자</label>
+          <select id="settings-provider-select" class="settings-input" aria-label="지도 제공자 선택">
+            <option value="osm">무료 지도 (OpenStreetMap)</option>
+            <option value="google">구글 지도</option>
+            <option value="naver">네이버 지도</option>
+            <option value="kakao">카카오 지도</option>
+          </select>
+          <p class="settings-hint">무료 지도는 키가 필요 없습니다. 구글/네이버/카카오는 아래에 키를 입력하세요.</p>
+        </div>
+
+        <div class="settings-field">
           <label class="settings-label" for="settings-vworld-key">
             VWorld API 키
             <span id="settings-vworld-status" class="settings-status"></span>
@@ -147,6 +171,40 @@
           />
           <p class="settings-hint">카카오: developers.kakao.com JavaScript 키, 사이트 도메인 등록</p>
           <button id="settings-kakao-save-btn" class="settings-save-btn" type="button">저장</button>
+        </div>
+
+        <div class="settings-field">
+          <label class="settings-label" for="settings-google-key">
+            구글 Maps API 키
+            <span id="settings-google-status" class="settings-status"></span>
+          </label>
+          <input
+            id="settings-google-key"
+            class="settings-input"
+            type="text"
+            maxlength="200"
+            autocomplete="off"
+            placeholder="구글 Maps API 키 입력"
+          />
+          <p class="settings-hint">구글: console.cloud.google.com에서 Maps JavaScript API 활성화 + 결제 등록, 사이트 도메인 제한 권장</p>
+          <button id="settings-google-save-btn" class="settings-save-btn" type="button">저장</button>
+        </div>
+
+        <div class="settings-field">
+          <label class="settings-label" for="settings-naver-key">
+            네이버 Maps Key ID (ncpKeyId)
+            <span id="settings-naver-status" class="settings-status"></span>
+          </label>
+          <input
+            id="settings-naver-key"
+            class="settings-input"
+            type="text"
+            maxlength="200"
+            autocomplete="off"
+            placeholder="네이버 Maps Key ID 입력"
+          />
+          <p class="settings-hint">네이버: NCP 콘솔 Maps 신규 Key ID(ncpKeyId) 발급 + 서비스 URL(도메인) 등록</p>
+          <button id="settings-naver-save-btn" class="settings-save-btn" type="button">저장</button>
         </div>
       </div>
     </div>

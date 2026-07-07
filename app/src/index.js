@@ -320,7 +320,7 @@ async function handleStats(request, env) {
 }
 
 /** 서버 저장 설정으로 허용하는 키 목록(화이트리스트). 그 외 키는 저장/반환하지 않는다. */
-const CONFIG_ALLOWED_KEYS = ["vworld_key", "kakao_key"];
+const CONFIG_ALLOWED_KEYS = ["vworld_key", "kakao_key", "google_key", "naver_key"];
 /** 설정 값 최대 길이(문자열, 200자 이하). */
 const CONFIG_MAX_VALUE_LEN = 200;
 

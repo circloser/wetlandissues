@@ -441,6 +441,77 @@ button, input {
   height: 100%;
 }
 
+/* ------------------------------------------------------------------ */
+/* 제공사 공통 지도 컨트롤(우상단): 지도 종류 select + 지적편집도 토글         */
+/* ------------------------------------------------------------------ */
+.map-controls {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 500; /* Leaflet 컨트롤(400) 위, 모달(1000) 아래 */
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.map-type-select {
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md, 10px);
+  background: #ffffff;
+  color: var(--color-text);
+  font-size: 0.82rem;
+  font-weight: 600;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.16);
+  cursor: pointer;
+}
+
+.cadastral-btn {
+  height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md, 10px);
+  background: #ffffff;
+  color: var(--color-text);
+  font-size: 0.82rem;
+  font-weight: 600;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.16);
+  cursor: pointer;
+  transition: background 0.15s var(--ease-toss, ease), color 0.15s ease;
+}
+
+.cadastral-btn--on {
+  background: var(--color-primary);
+  color: #ffffff;
+  border-color: var(--color-primary);
+}
+
+.cadastral-btn[hidden] {
+  display: none;
+}
+
+/* 키 없는 제공사 선택 시 지도 위 안내 오버레이(앱은 죽지 않음) */
+.map-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 450;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  text-align: center;
+  background: rgba(240, 244, 250, 0.94);
+  color: var(--color-text);
+  font-size: 0.95rem;
+  font-weight: 600;
+  line-height: 1.6;
+}
+
+.map-overlay[hidden] {
+  display: none;
+}
+
 /* 드래그 가능한 분할선 */
 .split-handle {
   flex: 0 0 6px;

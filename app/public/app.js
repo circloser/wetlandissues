@@ -104,7 +104,7 @@ const DEFAULT_MAP_CENTER = [36.3, 127.8];
 const DEFAULT_MAP_ZOOM = 7;
 
 /**
- * 서버(GET /api/config)에서 불러온 지도 설정. 최소 vworld_key, kakao_key 키를 쓴다.
+ * 서버(GET /api/config)에서 불러온 지도 설정. vworld_key, kakao_key, google_key, naver_key를 쓴다.
  * 지도 JS 키는 원래 브라우저에 노출되는 도메인 제한 키라 클라이언트 보관이 정상이다.
  */
 let mapConfig = {};
@@ -116,24 +116,86 @@ let baseLayerMap = {};
 /** 카카오 지도 SDK 로드 완료 여부(중복 로드 방지). */
 let kakaoSdkReady = false;
 
+/* ------------------------------------------------------------------ */
+/* 지도 제공사 어댑터 아키텍처 (OSM 기본 / 구글 / 네이버 / 카카오)             */
+/* ------------------------------------------------------------------ */
+
+/** 선택한 지도 제공사를 저장하는 localStorage 키(새로고침 후에도 유지). */
+const PROVIDER_STORAGE_KEY = "wetland-map-provider";
+/** 제공사 공통 지도 종류를 저장하는 localStorage 키. */
+const MAP_TYPE_STORAGE_KEY = "wetland-map-type";
+
+/**
+ * 제공사 전환 관련 전역 상태(gpsphoto State 패턴 이식).
+ * - provider: 'osm'(기본) | 'google' | 'naver' | 'kakao'
+ * - mapType: 'roadmap' | 'satellite' | 'hybrid' (제공사 공통)
+ * - cadastral: 지적편집도 토글 on/off
+ * - pendingView: 제공사 전환 시 이전 center/zoom을 보존해 새 어댑터에 적용하기 위한 임시값
+ */
+const State = {
+  provider: "osm",
+  mapType: "roadmap",
+  cadastral: false,
+  pendingView: null,
+};
+
+/** 키 없는 제공사를 선택했을 때 던지는 에러(오버레이 안내로 전환). */
+class NoKeyError extends Error {
+  constructor(provider) {
+    super("No API key for " + provider);
+    this.provider = provider;
+  }
+}
+
+/** 제공사별 한글 표시명(오버레이 안내 문구용). */
+function providerName(p) {
+  return { osm: "무료(OpenStreetMap)", google: "구글", naver: "네이버", kakao: "카카오" }[p] || p;
+}
+
+/**
+ * 제공사 전환 시 #map 내부를 새 엘리먼트로 교체해 깨끗한 컨테이너를 만든다.
+ * (Leaflet은 한 번 init한 노드를 재사용하면 _leaflet_id 충돌로 재init을 거부하므로,
+ * gpsphoto prepareContainer()처럼 매번 새 자식 엘리먼트를 준다.)
+ * @returns {HTMLElement}
+ */
+function prepareMapContainer() {
+  const host = document.getElementById("map");
+  host.innerHTML = "";
+  const inner = document.createElement("div");
+  inner.style.width = "100%";
+  inner.style.height = "100%";
+  host.appendChild(inner);
+  return inner;
+}
+
+/** 어댑터 레지스트리와 현재 어댑터 접근자. */
+let Adapters = {};
+function adapter() {
+  return Adapters[State.provider];
+}
+
 init();
 
 function init() {
-  map = L.map("map").setView(DEFAULT_MAP_CENTER, DEFAULT_MAP_ZOOM);
+  // 어댑터 레지스트리 구성(모듈 로드 순서상 함수 정의 이후 init에서 조립).
+  Adapters = {
+    osm: createOsmAdapter(),
+    google: createGoogleAdapter(),
+    naver: createNaverAdapter(),
+    kakao: createKakaoAdapter(),
+  };
 
-  initBaseLayers();
-
-  markersLayer = L.markerClusterGroup({
-    chunkedLoading: true,
-    maxClusterRadius: 50,
-    spiderfyOnMaxZoom: true,
-    disableClusteringAtZoom: CLUSTER_DISABLE_ZOOM,
-    iconCreateFunction: buildClusterIcon,
-  }).addTo(map);
+  // 저장된 제공사/지도 종류 복원(기본은 OSM/일반).
+  const storedProvider = localStorage.getItem(PROVIDER_STORAGE_KEY);
+  if (["osm", "google", "naver", "kakao"].includes(storedProvider)) {
+    State.provider = storedProvider;
+  }
+  const storedType = localStorage.getItem(MAP_TYPE_STORAGE_KEY);
+  if (["roadmap", "satellite", "hybrid"].includes(storedType)) {
+    State.mapType = storedType;
+  }
 
   applyDefaultDateFilterIfEmpty();
-
-  loadWetlands();
 
   document.getElementById("panel-close-btn").addEventListener("click", closePanel);
   document.getElementById("panel-show-all-btn").addEventListener("click", showAllIssuesPanel);
@@ -146,9 +208,11 @@ function init() {
   initDateFilterToggle();
   initSplitHandle();
   initMapSettingsPanel();
+  initMapControls();
   initRoadview();
 
-  // 서버에 저장된 지도 키를 불러와 VWorld 레이어/카카오 로드뷰 버튼을 초기 구성한다.
+  // 서버에 저장된 지도 키를 불러와 VWorld 레이어/카카오 로드뷰 버튼/제공사 렌더를 초기 구성한다.
+  // loadMapConfig 완료 후 현재 제공사로 지도를 준비하고 습지 데이터를 로드한다.
   loadMapConfig();
 
   // 모바일에서는 습지를 선택하기 전까지 하단 시트를 숨겨둔다(데스크톱은 상시 노출).
@@ -161,6 +225,69 @@ function init() {
   // 페이지 로드 시 뉴스 신선도 확인: 최근 12시간 내 수집 완료면 아무것도 돌리지 않고
   // "최신 확인" 표시만, 오래됐으면 자동으로 한 바퀴만 돌고 멈춘다.
   ensureFreshNews();
+}
+
+/**
+ * 현재 State.provider의 어댑터를 로드/전환하고 습지 데이터를 렌더링한다.
+ * (gpsphoto ensureMapReady 이식) 이전 view(center/zoom)를 보존하고, 키가 없으면
+ * NoKeyError를 잡아 오버레이 안내만 띄운 뒤 앱은 계속 살아 있게 한다.
+ * @param {boolean} [fitDefault=false] 지도 준비 후 전국 화면으로 맞출지 여부(초기 로드)
+ */
+async function ensureMapReady(fitDefault = false) {
+  const a = adapter();
+  try {
+    if (!a.ready) {
+      await a.ensureLoaded();
+      a.onViewChange(() => {}); // 어댑터별 view 변경 훅(현재 OSM 라벨/클러스터는 자체 처리)
+    }
+
+    a.setMapType(State.mapType);
+    a.setCadastral(State.cadastral && a.supportsCadastral());
+    updateMapControls();
+
+    // 이전 제공사의 center/zoom을 새 어댑터에 이어붙인다(전국 화면으로 튀지 않도록).
+    let appliedView = false;
+    if (State.pendingView) {
+      a.applyView(State.pendingView);
+      State.pendingView = null;
+      appliedView = true;
+    } else if (fitDefault) {
+      a.fitKorea();
+    }
+
+    hideMapOverlay();
+    // 습지 데이터가 이미 있으면 즉시 렌더, 없으면(초기 로드) loadWetlands로 가져와 렌더한다.
+    if (wetlandListCache.length > 0) {
+      renderMarkers(wetlandListCache);
+    } else {
+      loadWetlands();
+    }
+  } catch (err) {
+    // 로드 실패(키 없음 포함) 시 이전 제공사의 지도 DOM이 남아 있으면 비워 깔끔한 안내만 남긴다.
+    prepareMapContainer();
+    if (err instanceof NoKeyError) {
+      showMapOverlay(
+        `${providerName(err.provider)} 지도 키가 필요합니다. ⚙ 설정에서 API 키를 입력하세요.`
+      );
+    } else {
+      console.error("지도를 준비하지 못했습니다.", err);
+      showMapOverlay("지도를 불러오지 못했습니다. API 키와 등록 도메인을 확인하세요.");
+    }
+  }
+}
+
+/**
+ * 지도 위 안내 오버레이를 표시한다(키 없음/로드 실패 시). 앱은 죽지 않는다.
+ * @param {string} message
+ */
+function showMapOverlay(message) {
+  const el = document.getElementById("map-overlay");
+  el.textContent = message;
+  el.hidden = false;
+}
+
+function hideMapOverlay() {
+  document.getElementById("map-overlay").hidden = true;
 }
 
 /**
@@ -438,10 +565,37 @@ function buildDateRangeQuery(prefix) {
 }
 
 /**
- * 습지 배열을 받아 지도 위 마커를 새로 그린다 (기존 마커는 모두 제거 후 재생성).
+ * 습지 배열을 받아 현재 제공사 어댑터로 마커를 새로 그린다.
+ * (OSM은 기존 Leaflet 군집 렌더, 구글/네이버/카카오는 native 배지 렌더로 위임한다.)
  * @param {Array<object>} wetlands
  */
 function renderMarkers(wetlands) {
+  const a = adapter();
+  if (!a || !a.ready) return;
+  a.renderWetlands(wetlands, openPanel);
+}
+
+/**
+ * 습지 하나로 지도를 이동한다(제공사 공통). 검색 선택/뱃지 클릭에서 호출.
+ * @param {object} wetland
+ */
+function flyToWetland(wetland) {
+  const a = adapter();
+  if (a && a.ready) a.flyToWetland(wetland, CLUSTER_DISABLE_ZOOM);
+}
+
+/** 지도를 대한민국 전역 화면으로 되돌린다(제공사 공통). [전체 보기] 복귀에 사용. */
+function fitKorea() {
+  const a = adapter();
+  if (a && a.ready) a.fitKorea();
+}
+
+/**
+ * OSM(Leaflet) 전용 마커 렌더 — 기존 동작 그대로(군집/라벨/3색 배지/클릭→패널).
+ * osm 어댑터의 renderWetlands가 이 함수를 호출한다.
+ * @param {Array<object>} wetlands
+ */
+function renderMarkersOsm(wetlands) {
   markersLayer.clearLayers();
   markerByWetlandId.clear();
 
@@ -586,7 +740,7 @@ async function showAllIssuesPanel() {
   currentWetland = null;
   updatePanelHeader();
   // 전체 보기로 돌아올 때 지도도 전국 화면으로 복귀한다.
-  map.flyTo(DEFAULT_MAP_CENTER, DEFAULT_MAP_ZOOM);
+  fitKorea();
   await loadIssues();
 }
 
@@ -756,7 +910,7 @@ function buildIssueListItem(issue) {
 function onWetlandBadgeClick(issue) {
   const wetland = wetlandListCache.find((w) => w.id === issue.wetland_id);
   if (!wetland) return;
-  map.flyTo([wetland.lat, wetland.lng], CLUSTER_DISABLE_ZOOM);
+  flyToWetland(wetland);
   openPanel(wetland);
 }
 
@@ -1219,7 +1373,7 @@ function renderWetlandSearchResults(query) {
  * @param {object} wetland
  */
 function selectWetlandFromSearch(wetland) {
-  map.flyTo([wetland.lat, wetland.lng], CLUSTER_DISABLE_ZOOM);
+  flyToWetland(wetland);
   openPanel(wetland);
   closeWetlandSearchResults();
 
@@ -1527,13 +1681,18 @@ async function loadMapConfig() {
 }
 
 /**
- * 현재 mapConfig에 맞춰 지도 레이어/로드뷰 버튼/설정 패널 표시를 일괄 갱신한다.
- * loadMapConfig(초기)와 설정 저장 후 모두 이 함수를 호출해 페이지 새로고침 없이 반영한다.
+ * 현재 mapConfig에 맞춰 지도(현재 제공사 준비/재렌더)·VWorld 레이어·로드뷰 버튼·설정 표시를
+ * 일괄 갱신한다. loadMapConfig(초기)와 설정 저장 후 모두 이 함수를 호출해 새로고침 없이 반영한다.
  */
 function applyMapConfig() {
-  rebuildBaseLayers();
+  // OSM일 때만 VWorld 레이어 컨트롤을 재구성한다(구글/네이버/카카오는 자체 SDK 레이어 사용).
+  if (State.provider === "osm" && layersControl) {
+    rebuildBaseLayers();
+  }
   updateRoadviewButtonVisibility();
   updateSettingsStatusLabels();
+  // 현재 제공사로 지도를 준비/재렌더한다(키 저장 후 즉시 반영, 초기 로드 포함).
+  ensureMapReady(!adapter().ready);
 }
 
 /**
@@ -1553,6 +1712,15 @@ function initMapSettingsPanel() {
   document
     .getElementById("settings-kakao-save-btn")
     .addEventListener("click", () => saveConfigKey("kakao_key", "settings-kakao-key"));
+  document
+    .getElementById("settings-google-save-btn")
+    .addEventListener("click", () => saveConfigKey("google_key", "settings-google-key"));
+  document
+    .getElementById("settings-naver-save-btn")
+    .addEventListener("click", () => saveConfigKey("naver_key", "settings-naver-key"));
+
+  // 지도 제공자 선택: 변경 시 즉시 전환(제공사 어댑터 로드/렌더).
+  document.getElementById("settings-provider-select").addEventListener("change", onProviderChange);
 }
 
 /**
@@ -1561,6 +1729,9 @@ function initMapSettingsPanel() {
 function openMapSettings() {
   document.getElementById("settings-vworld-key").value = mapConfig.vworld_key || "";
   document.getElementById("settings-kakao-key").value = mapConfig.kakao_key || "";
+  document.getElementById("settings-google-key").value = mapConfig.google_key || "";
+  document.getElementById("settings-naver-key").value = mapConfig.naver_key || "";
+  document.getElementById("settings-provider-select").value = State.provider;
   updateSettingsStatusLabels();
   document.getElementById("map-settings-overlay").hidden = false;
 }
@@ -1575,6 +1746,27 @@ function closeMapSettings() {
 function updateSettingsStatusLabels() {
   setSettingsStatus("settings-vworld-status", Boolean((mapConfig.vworld_key || "").trim()));
   setSettingsStatus("settings-kakao-status", Boolean((mapConfig.kakao_key || "").trim()));
+  setSettingsStatus("settings-google-status", Boolean((mapConfig.google_key || "").trim()));
+  setSettingsStatus("settings-naver-status", Boolean((mapConfig.naver_key || "").trim()));
+}
+
+/**
+ * 지도 제공자 select 변경 핸들러: 현재 view(center/zoom)를 보존하고 새 제공사로 전환한다.
+ * 이전 어댑터를 reset하고 State.provider를 갱신·localStorage 저장 후 ensureMapReady로 전환.
+ */
+async function onProviderChange() {
+  const nextProvider = document.getElementById("settings-provider-select").value;
+  if (nextProvider === State.provider) return;
+
+  const prevAdapter = adapter();
+  // 현재 center/zoom을 캡처해 새 제공사가 같은 위치로 열리게 한다.
+  State.pendingView = prevAdapter && prevAdapter.ready ? prevAdapter.getView() : null;
+  if (prevAdapter && prevAdapter.ready) prevAdapter.reset();
+
+  State.provider = nextProvider;
+  localStorage.setItem(PROVIDER_STORAGE_KEY, nextProvider);
+
+  await ensureMapReady(false);
 }
 
 /**
@@ -1621,6 +1813,43 @@ async function saveConfigKey(key, inputId) {
   } catch (err) {
     showToast(`저장에 실패했습니다: ${err.message}`, true);
   }
+}
+
+/**
+ * 제공사 공통 지도 컨트롤(지도 종류 select + 지적편집도 토글)을 초기화한다.
+ */
+function initMapControls() {
+  const typeSelect = document.getElementById("map-type-select");
+  typeSelect.value = State.mapType;
+  typeSelect.addEventListener("change", () => {
+    State.mapType = typeSelect.value;
+    localStorage.setItem(MAP_TYPE_STORAGE_KEY, State.mapType);
+    const a = adapter();
+    if (a && a.ready) a.setMapType(State.mapType);
+  });
+
+  document.getElementById("cadastral-btn").addEventListener("click", () => {
+    const a = adapter();
+    if (!a || !a.ready || !a.supportsCadastral()) return;
+    State.cadastral = !State.cadastral;
+    a.setCadastral(State.cadastral);
+    updateMapControls();
+  });
+}
+
+/**
+ * 지도 종류 select 값과 지적편집도 버튼(지원 여부/활성 상태)을 현재 State/어댑터에 맞춘다.
+ */
+function updateMapControls() {
+  const typeSelect = document.getElementById("map-type-select");
+  typeSelect.value = State.mapType;
+
+  const btn = document.getElementById("cadastral-btn");
+  const a = adapter();
+  const supported = Boolean(a && a.supportsCadastral());
+  btn.hidden = !supported;
+  btn.setAttribute("aria-pressed", String(supported && State.cadastral));
+  btn.classList.toggle("cadastral-btn--on", supported && State.cadastral);
 }
 
 /**
@@ -1745,4 +1974,452 @@ function escapeHtml(str) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+/* ================================================================== */
+/* 지도 제공사 어댑터 (gpsphoto 표준 시그니처 이식)                          */
+/* 공통 인터페이스:                                                        */
+/*   get ready, async ensureLoaded(), setMapType(type),                 */
+/*   supportsCadastral(), setCadastral(on), fitKorea(),                 */
+/*   flyToWetland(w, zoom), getView(), applyView(v), onViewChange(cb),  */
+/*   clearWetlands(), renderWetlands(wetlands, onWetlandClick), reset() */
+/* ================================================================== */
+
+/**
+ * 외부 지도 SDK 스크립트를 동적으로 로드한다(구글/네이버/카카오 전용, 불가피).
+ * @param {string} src
+ * @returns {Promise<void>}
+ */
+function loadMapScript(src) {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = src;
+    s.async = true;
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error("스크립트 로드 실패: " + src));
+    document.head.appendChild(s);
+  });
+}
+
+/**
+ * native 제공사(구글/네이버/카카오)에서 습지 배지 마커에 쓸 HTML 엘리먼트를 만든다.
+ * 기존 .wetland-marker 계열 CSS를 재사용해 OSM과 시각적 톤을 맞춘다.
+ * issue_count>0인 습지만 배지(숫자)로, 0건은 회색 점(작게)으로 표시한다.
+ * @param {number} issueCount
+ * @param {number} negativeCount
+ * @returns {{ el: HTMLElement, size: number }}
+ */
+function buildNativeBadgeEl(issueCount, negativeCount) {
+  const count = Number(issueCount) || 0;
+  const negative = Number(negativeCount) || 0;
+  const el = document.createElement("div");
+
+  if (count === 0) {
+    el.className = "wetland-marker wetland-marker--empty";
+    return { el, size: 14 };
+  }
+
+  let sizeClass = "wetland-marker--sm";
+  let size = 26;
+  if (count >= 10) {
+    sizeClass = "wetland-marker--lg";
+    size = 38;
+  } else if (count >= 5) {
+    sizeClass = "wetland-marker--md";
+    size = 32;
+  }
+  el.className = "wetland-marker " + sizeClass + (negative > 0 ? " wetland-marker--negative" : "");
+  el.textContent = String(count);
+  return { el, size };
+}
+
+/**
+ * native 제공사에서 렌더할 습지를 추린다(사용자 합의: 상용 지도는 단순 표시).
+ * issue_count>0 습지는 전부, 0건 습지는 성능/시야 정리를 위해 표시하지 않는다.
+ * @param {Array<object>} wetlands
+ * @returns {Array<object>}
+ */
+function selectNativeWetlands(wetlands) {
+  return wetlands.filter((w) => (Number(w.issue_count) || 0) > 0);
+}
+
+/* --- OSM(Leaflet) 어댑터: 현재 구현을 그대로 감싼 것(동작 불변) --- */
+function createOsmAdapter() {
+  return {
+    get ready() {
+      return !!map;
+    },
+    async ensureLoaded() {
+      // #map 안에 깨끗한 컨테이너를 만들고 그 위에 Leaflet 지도를 생성한다.
+      const el = prepareMapContainer();
+      map = L.map(el).setView(DEFAULT_MAP_CENTER, DEFAULT_MAP_ZOOM);
+
+      initBaseLayers();
+
+      markersLayer = L.markerClusterGroup({
+        chunkedLoading: true,
+        maxClusterRadius: 50,
+        spiderfyOnMaxZoom: true,
+        disableClusteringAtZoom: CLUSTER_DISABLE_ZOOM,
+        iconCreateFunction: buildClusterIcon,
+      }).addTo(map);
+
+      // 저장된 VWorld 키가 있으면 레이어를 붙인다(컨트롤 재구성).
+      rebuildBaseLayers();
+      setTimeout(() => {
+        if (map) map.invalidateSize();
+      }, 0);
+    },
+    setMapType() {
+      // OSM은 지도 종류를 좌상단 Leaflet 레이어 컨트롤(일반/위성/하이브리드 등)로 직접 고르므로
+      // 공통 select와는 연동하지 않는다(기존 UX 그대로 유지).
+    },
+    supportsCadastral() {
+      // OSM 지적편집도는 VWorld 지적편집도 레이어(키 필요)로 제공되며 레이어 컨트롤에서 선택한다.
+      // 공통 토글 버튼과는 연동하지 않으므로 false로 둔다(기존 동작 보존).
+      return false;
+    },
+    setCadastral() {},
+    fitKorea() {
+      if (map) map.flyTo(DEFAULT_MAP_CENTER, DEFAULT_MAP_ZOOM);
+    },
+    flyToWetland(w, zoom) {
+      if (map) map.flyTo([w.lat, w.lng], zoom || CLUSTER_DISABLE_ZOOM);
+    },
+    getView() {
+      if (!map) return null;
+      const c = map.getCenter();
+      return { lat: c.lat, lng: c.lng, zoom: map.getZoom() };
+    },
+    applyView(v) {
+      if (map && v) map.setView([v.lat, v.lng], Math.round(v.zoom), { animate: false });
+    },
+    onViewChange() {},
+    clearWetlands() {
+      if (markersLayer) markersLayer.clearLayers();
+    },
+    renderWetlands(wetlands) {
+      renderMarkersOsm(wetlands);
+    },
+    reset() {
+      // 다른 제공사로 전환 시 Leaflet 인스턴스를 완전히 파기한다(컨테이너는 전환 시 교체됨).
+      if (map) {
+        try {
+          map.remove();
+        } catch (e) {
+          /* 이미 제거된 경우 무시 */
+        }
+      }
+      map = null;
+      markersLayer = null;
+      layersControl = null;
+      baseLayerMap = {};
+      markerByWetlandId.clear();
+    },
+  };
+}
+
+/* --- 구글 어댑터 --- */
+function createGoogleAdapter() {
+  let gmap = null;
+  let loaded = false;
+  let markers = [];
+  return {
+    get ready() {
+      return !!gmap;
+    },
+    async ensureLoaded() {
+      const key = (mapConfig.google_key || "").trim();
+      if (!key) throw new NoKeyError("google");
+      if (!loaded) {
+        await new Promise((res, rej) => {
+          window.__wetlandGmapReady = () => res();
+          loadMapScript(
+            `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(key)}&v=weekly&loading=async&callback=__wetlandGmapReady`
+          ).catch(rej);
+        });
+        loaded = true;
+      }
+      const el = prepareMapContainer();
+      gmap = new google.maps.Map(el, {
+        center: { lat: DEFAULT_MAP_CENTER[0], lng: DEFAULT_MAP_CENTER[1] },
+        zoom: DEFAULT_MAP_ZOOM,
+        mapTypeControl: false,
+        streetViewControl: false,
+        fullscreenControl: false,
+      });
+    },
+    setMapType(t) {
+      if (gmap) gmap.setMapTypeId({ roadmap: "roadmap", satellite: "satellite", hybrid: "hybrid" }[t] || "roadmap");
+    },
+    supportsCadastral() {
+      return false; // 구글은 지적편집도 미지원
+    },
+    setCadastral() {},
+    fitKorea() {
+      if (gmap) {
+        gmap.setCenter({ lat: DEFAULT_MAP_CENTER[0], lng: DEFAULT_MAP_CENTER[1] });
+        gmap.setZoom(DEFAULT_MAP_ZOOM);
+      }
+    },
+    flyToWetland(w, zoom) {
+      if (gmap) {
+        gmap.panTo({ lat: w.lat, lng: w.lng });
+        gmap.setZoom(zoom || CLUSTER_DISABLE_ZOOM);
+      }
+    },
+    getView() {
+      if (!gmap) return null;
+      const c = gmap.getCenter();
+      return { lat: c.lat(), lng: c.lng(), zoom: gmap.getZoom() };
+    },
+    applyView(v) {
+      if (gmap && v) {
+        gmap.setCenter({ lat: v.lat, lng: v.lng });
+        gmap.setZoom(Math.round(v.zoom));
+      }
+    },
+    onViewChange() {},
+    clearWetlands() {
+      markers.forEach((m) => m.setMap(null));
+      markers = [];
+    },
+    renderWetlands(wetlands, onWetlandClick) {
+      this.clearWetlands();
+      for (const w of selectNativeWetlands(wetlands)) {
+        const { el } = buildNativeBadgeEl(w.issue_count, w.negative_count);
+        // 구글 AdvancedMarkerElement 없이도 동작하도록 OverlayView 대신 표준 Marker + label 사용은
+        // 스타일 제약이 있어, HTML 배지는 커스텀 오버레이로 렌더한다.
+        const overlay = makeGoogleHtmlMarker(gmap, w, el, () => onWetlandClick(w));
+        markers.push(overlay);
+      }
+    },
+    reset() {
+      this.clearWetlands();
+      gmap = null;
+    },
+  };
+}
+
+/**
+ * 구글 지도에 HTML 콘텐츠(배지) 마커를 올리기 위한 OverlayView 팩토리.
+ * (구글 기본 Marker는 임의 HTML/CSS 배지를 지원하지 않으므로 OverlayView로 직접 배치한다.)
+ * @param {google.maps.Map} gmap
+ * @param {object} w 습지
+ * @param {HTMLElement} el 배지 엘리먼트
+ * @param {Function} onClick
+ * @returns {google.maps.OverlayView}
+ */
+function makeGoogleHtmlMarker(gmap, w, el, onClick) {
+  const overlay = new google.maps.OverlayView();
+  el.style.position = "absolute";
+  el.style.transform = "translate(-50%, -50%)";
+  el.style.cursor = "pointer";
+  el.addEventListener("click", onClick);
+  overlay.onAdd = function () {
+    this.getPanes().overlayMouseTarget.appendChild(el);
+  };
+  overlay.draw = function () {
+    const proj = this.getProjection();
+    if (!proj) return;
+    const pos = proj.fromLatLngToDivPixel(new google.maps.LatLng(w.lat, w.lng));
+    if (pos) {
+      el.style.left = pos.x + "px";
+      el.style.top = pos.y + "px";
+    }
+  };
+  overlay.onRemove = function () {
+    if (el.parentNode) el.parentNode.removeChild(el);
+  };
+  overlay.setMap(gmap);
+  return overlay;
+}
+
+/* --- 네이버 어댑터 --- */
+function createNaverAdapter() {
+  let nmap = null;
+  let loaded = false;
+  let markers = [];
+  let cadastralLayer = null;
+  return {
+    get ready() {
+      return !!nmap;
+    },
+    async ensureLoaded() {
+      const key = (mapConfig.naver_key || "").trim();
+      if (!key) throw new NoKeyError("naver");
+      if (!loaded) {
+        // 신규 NCP 콘솔(2024+) 키는 ncpKeyId 파라미터로 인증한다(gpsphoto와 동일 방식).
+        await loadMapScript(`https://oapi.map.naver.com/openapi/v3/maps.js?ncpKeyId=${encodeURIComponent(key)}`);
+        loaded = true;
+      }
+      if (!(window.naver && naver.maps)) {
+        throw new Error("네이버 지도 SDK 로드 실패 — 키(ncpKeyId)와 등록 도메인을 확인하세요.");
+      }
+      const el = prepareMapContainer();
+      nmap = new naver.maps.Map(el, {
+        center: new naver.maps.LatLng(DEFAULT_MAP_CENTER[0], DEFAULT_MAP_CENTER[1]),
+        zoom: DEFAULT_MAP_ZOOM,
+      });
+    },
+    setMapType(t) {
+      if (!nmap) return;
+      const M = naver.maps.MapTypeId;
+      nmap.setMapTypeId({ roadmap: M.NORMAL, satellite: M.SATELLITE, hybrid: M.HYBRID }[t] || M.NORMAL);
+    },
+    supportsCadastral() {
+      return true;
+    },
+    setCadastral(on) {
+      if (!nmap) return;
+      if (on) {
+        if (!cadastralLayer) cadastralLayer = new naver.maps.CadastralLayer();
+        cadastralLayer.setMap(nmap);
+      } else if (cadastralLayer) {
+        cadastralLayer.setMap(null);
+      }
+    },
+    fitKorea() {
+      if (nmap) {
+        nmap.setCenter(new naver.maps.LatLng(DEFAULT_MAP_CENTER[0], DEFAULT_MAP_CENTER[1]));
+        nmap.setZoom(DEFAULT_MAP_ZOOM);
+      }
+    },
+    flyToWetland(w, zoom) {
+      if (nmap) {
+        nmap.panTo(new naver.maps.LatLng(w.lat, w.lng));
+        nmap.setZoom(zoom || CLUSTER_DISABLE_ZOOM);
+      }
+    },
+    getView() {
+      if (!nmap) return null;
+      const c = nmap.getCenter();
+      return { lat: c.lat(), lng: c.lng(), zoom: nmap.getZoom() };
+    },
+    applyView(v) {
+      if (nmap && v) {
+        nmap.setCenter(new naver.maps.LatLng(v.lat, v.lng));
+        nmap.setZoom(Math.round(v.zoom));
+      }
+    },
+    onViewChange() {},
+    clearWetlands() {
+      markers.forEach((m) => m.setMap(null));
+      markers = [];
+    },
+    renderWetlands(wetlands, onWetlandClick) {
+      this.clearWetlands();
+      for (const w of selectNativeWetlands(wetlands)) {
+        const { el, size } = buildNativeBadgeEl(w.issue_count, w.negative_count);
+        el.style.cursor = "pointer";
+        const m = new naver.maps.Marker({
+          position: new naver.maps.LatLng(w.lat, w.lng),
+          map: nmap,
+          icon: { content: el, anchor: new naver.maps.Point(size / 2, size / 2) },
+        });
+        naver.maps.Event.addListener(m, "click", () => onWetlandClick(w));
+        markers.push(m);
+      }
+    },
+    reset() {
+      this.clearWetlands();
+      cadastralLayer = null;
+      nmap = null;
+    },
+  };
+}
+
+/* --- 카카오 어댑터 --- */
+function createKakaoAdapter() {
+  let kmap = null;
+  let loaded = false;
+  let markers = [];
+  return {
+    get ready() {
+      return !!kmap;
+    },
+    async ensureLoaded() {
+      const key = (mapConfig.kakao_key || "").trim();
+      if (!key) throw new NoKeyError("kakao");
+      if (!loaded) {
+        await loadMapScript(`https://dapi.kakao.com/v2/maps/sdk.js?appkey=${encodeURIComponent(key)}&autoload=false`);
+        await new Promise((res) => kakao.maps.load(res));
+        loaded = true;
+      }
+      const el = prepareMapContainer();
+      // 카카오 level은 값이 클수록 축소 — 전국 뷰는 level 12 정도.
+      kmap = new kakao.maps.Map(el, {
+        center: new kakao.maps.LatLng(DEFAULT_MAP_CENTER[0], DEFAULT_MAP_CENTER[1]),
+        level: 12,
+      });
+      setTimeout(() => {
+        if (kmap) kmap.relayout();
+      }, 0);
+    },
+    setMapType(t) {
+      if (!kmap) return;
+      const M = kakao.maps.MapTypeId;
+      kmap.setMapTypeId({ roadmap: M.ROADMAP, satellite: M.SKYVIEW, hybrid: M.HYBRID }[t] || M.ROADMAP);
+    },
+    supportsCadastral() {
+      return true;
+    },
+    setCadastral(on) {
+      if (!kmap) return;
+      const T = kakao.maps.MapTypeId.USE_DISTRICT; // 지적편집도
+      if (on) kmap.addOverlayMapTypeId(T);
+      else kmap.removeOverlayMapTypeId(T);
+    },
+    fitKorea() {
+      if (kmap) {
+        kmap.setCenter(new kakao.maps.LatLng(DEFAULT_MAP_CENTER[0], DEFAULT_MAP_CENTER[1]));
+        kmap.setLevel(12);
+      }
+    },
+    flyToWetland(w, zoom) {
+      if (kmap) {
+        // 공통 zoom(레플릿 기준 12 부근)을 카카오 level로 근사 변환(21 - zoom).
+        const level = Math.max(1, Math.min(14, Math.round(21 - (zoom || CLUSTER_DISABLE_ZOOM))));
+        kmap.setLevel(level);
+        kmap.panTo(new kakao.maps.LatLng(w.lat, w.lng));
+      }
+    },
+    getView() {
+      if (!kmap) return null;
+      const c = kmap.getCenter();
+      return { lat: c.getLat(), lng: c.getLng(), zoom: 21 - kmap.getLevel() };
+    },
+    applyView(v) {
+      if (kmap && v) {
+        kmap.setLevel(Math.max(1, Math.min(14, Math.round(21 - v.zoom))));
+        kmap.setCenter(new kakao.maps.LatLng(v.lat, v.lng));
+      }
+    },
+    onViewChange() {},
+    clearWetlands() {
+      markers.forEach((m) => m.setMap(null));
+      markers = [];
+    },
+    renderWetlands(wetlands, onWetlandClick) {
+      this.clearWetlands();
+      for (const w of selectNativeWetlands(wetlands)) {
+        const { el } = buildNativeBadgeEl(w.issue_count, w.negative_count);
+        el.style.cursor = "pointer";
+        el.addEventListener("click", () => onWetlandClick(w));
+        const ov = new kakao.maps.CustomOverlay({
+          position: new kakao.maps.LatLng(w.lat, w.lng),
+          content: el,
+          xAnchor: 0.5,
+          yAnchor: 0.5,
+          zIndex: 10,
+        });
+        ov.setMap(kmap);
+        markers.push(ov);
+      }
+    },
+    reset() {
+      this.clearWetlands();
+      kmap = null;
+    },
+  };
 }
