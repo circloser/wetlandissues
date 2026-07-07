@@ -507,11 +507,15 @@ function renderMarkersOsm(wetlands) {
       negativeCount, // 클러스터에 부정 습지 포함 여부 표시용(합산)
     });
 
+    // 습지명 라벨을 상시 표시한다. 이슈 있는 습지뿐 아니라 회색 점(이슈 없는 습지)도
+    // 개별로 풀려 있으면(클러스터 안 됨) 이름이 보이게 한다. 클러스터에 묶이면 그 마커는
+    // 지도에서 빠지므로 라벨도 자동으로 사라져(성능/시야 정리), 화면에 보이는 개별 점만 라벨이 붙는다.
+    // 회색 점은 라벨을 살짝 옅게(wetland-label--muted) 표시해 이슈 습지와 구분한다.
     marker.bindTooltip(wetland.name, {
-      permanent: issueCount > 0,
+      permanent: true,
       direction: "bottom",
       offset: [0, 4],
-      className: "wetland-label",
+      className: issueCount > 0 ? "wetland-label" : "wetland-label wetland-label--muted",
     });
 
     marker.on("click", () => openPanel(wetland));
