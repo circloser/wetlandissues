@@ -868,6 +868,34 @@ button, input {
   border-top-color: var(--color-primary);
 }
 
+/* 습지 선택 해제 X 버튼 — 습지명 바로 오른쪽. 클릭 시 전체 뉴스로 돌아간다. */
+.wetland-clear-btn {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  margin-left: -2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 50%;
+  background: var(--color-surface-sub);
+  color: var(--color-text-muted);
+  font-size: 0.82rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s var(--ease-toss), color 0.15s var(--ease-toss);
+}
+
+.wetland-clear-btn:hover {
+  background: var(--color-primary-soft);
+  color: var(--color-primary-strong);
+}
+
+.wetland-clear-btn[hidden] {
+  display: none;
+}
+
 .panel-show-all-btn {
   flex-shrink: 0;
   padding: 6px 12px;

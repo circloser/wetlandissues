@@ -195,6 +195,7 @@ function init() {
 
   document.getElementById("panel-close-btn").addEventListener("click", closePanel);
   document.getElementById("panel-show-all-btn").addEventListener("click", showAllIssuesPanel);
+  document.getElementById("wetland-clear-btn").addEventListener("click", showAllIssuesPanel);
   document.getElementById("issue-sort-select").addEventListener("change", onSortChange);
   document.getElementById("negative-filter-checkbox").addEventListener("change", onNegativeFilterChange);
   document.getElementById("collect-btn").addEventListener("click", onCollectClick);
@@ -233,6 +234,11 @@ async function ensureMapReady(fitDefault = false) {
   const a = adapter();
   try {
     if (!a.ready) {
+      // native 제공사(구글/네이버/카카오)는 SDK 로드에 시간이 걸리므로, "불러오는 중"을
+      // 먼저 띄워 멈춘 것처럼 보이지 않게 한다(로드 완료/실패 시 아래에서 갱신).
+      if (State.provider !== "osm") {
+        showMapOverlay(`${providerName(State.provider)} 지도를 불러오는 중...`);
+      }
       await a.ensureLoaded();
       a.onViewChange(() => {}); // 어댑터별 view 변경 훅(현재 OSM 라벨/클러스터는 자체 처리)
     }
@@ -662,13 +668,16 @@ async function onNegativeFilterChange() {
 function updatePanelHeader() {
   const titleEl = document.getElementById("panel-title");
   const showAllBtn = document.getElementById("panel-show-all-btn");
+  const clearBtn = document.getElementById("wetland-clear-btn");
 
   if (viewMode === "wetland" && currentWetland) {
     titleEl.textContent = currentWetland.name;
     showAllBtn.hidden = false;
+    clearBtn.hidden = false;
   } else {
     titleEl.textContent = "전체 최신 뉴스";
     showAllBtn.hidden = true;
+    clearBtn.hidden = true;
   }
 
   // 로드뷰 버튼은 카카오 키가 있고 습지 모드일 때만 노출된다(모드 전환마다 재평가).
@@ -1926,16 +1935,44 @@ function escapeHtml(str) {
  * @param {string} src
  * @returns {Promise<void>}
  */
-function loadMapScript(src) {
+function loadMapScript(src, timeoutMs = 12000) {
   return new Promise((resolve, reject) => {
     const s = document.createElement("script");
+    let settled = false;
+    // 타임아웃: 잘못된 키·미등록 도메인 등으로 SDK 로드가 응답 없이 멈추면(프리즈) 무한
+    // 대기하지 않고 실패 처리해, 호출부가 안내 오버레이를 띄우고 다른 지도로 전환할 수 있게 한다.
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(new Error("지도 SDK 로드 시간 초과: " + src));
+    }, timeoutMs);
     s.src = src;
     s.async = true;
-    s.onload = () => resolve();
-    s.onerror = () => reject(new Error("스크립트 로드 실패: " + src));
+    s.onload = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve();
+    };
+    s.onerror = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(new Error("스크립트 로드 실패: " + src));
+    };
     document.head.appendChild(s);
   });
 }
+
+// 네이버 지도 SDK는 키/도메인 인증 실패 시 이 전역 콜백을 비동기로 호출한다.
+// 정의해 두지 않으면 지도가 조용히 깨진 채 멈춘 것처럼 보이므로, 안내 오버레이로 알린다.
+window.navermap_authFailure = function () {
+  try {
+    showMapOverlay("네이버 지도 인증 실패 — 키(ncpKeyId)와 등록 도메인을 확인하세요.");
+  } catch (e) {
+    /* showMapOverlay 준비 전이면 무시 */
+  }
+};
 
 /**
  * native 제공사(구글/네이버/카카오)에서 습지 배지 마커에 쓸 HTML 엘리먼트를 만든다.
@@ -2281,6 +2318,8 @@ function createNaverAdapter() {
         loaded = true;
       }
       if (!(window.naver && naver.maps)) {
+        // 다음 시도(키 수정 후)에서 재로드하도록 상태를 되돌린다.
+        loaded = false;
         throw new Error("네이버 지도 SDK 로드 실패 — 키(ncpKeyId)와 등록 도메인을 확인하세요.");
       }
       const el = prepareMapContainer();
