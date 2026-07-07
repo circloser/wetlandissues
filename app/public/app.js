@@ -683,13 +683,15 @@ function updatePanelHeader() {
 
   if (viewMode === "wetland" && currentWetland) {
     titleEl.textContent = currentWetland.name;
-    showAllBtn.hidden = false;
     clearBtn.hidden = false;
   } else {
     titleEl.textContent = "전체 최신 뉴스";
-    showAllBtn.hidden = true;
     clearBtn.hidden = true;
   }
+
+  // [전체 보기]는 항상 노출한다 — 어느 상태(습지 선택/✕로 해제 후 확대된 지도 등)에서든
+  // 지도를 전국 화면으로 되돌리고 전체 뉴스로 볼 수 있게 한다.
+  showAllBtn.hidden = false;
 
   // 로드뷰 버튼은 카카오 키가 있고 습지 모드일 때만 노출된다(모드 전환마다 재평가).
   updateRoadviewButtonVisibility();
@@ -1832,13 +1834,12 @@ function initRoadview() {
 
 /**
  * 로드뷰 버튼 표시 여부를 갱신한다.
- * - 카카오 키가 없으면 버튼 자체를 숨긴다.
- * - 키가 있고 습지 모드(currentWetland 존재)면 표시, 전체 모드면 숨긴다.
+ * 습지 모드(currentWetland 존재)면 항상 표시한다. 카카오 키가 있으면 앱 안 모달로,
+ * 없으면 외부 카카오 지도 로드뷰(새 탭)로 열리므로 키가 없어도 동작한다.
  */
 function updateRoadviewButtonVisibility() {
   const btn = document.getElementById("roadview-btn");
-  const hasKey = Boolean((mapConfig.kakao_key || "").trim());
-  btn.hidden = !(hasKey && viewMode === "wetland" && currentWetland);
+  btn.hidden = !(viewMode === "wetland" && currentWetland);
 }
 
 /**
@@ -1888,6 +1889,17 @@ function loadKakaoSdk() {
 async function openRoadview() {
   if (!currentWetland) return;
 
+  // 카카오 키가 없으면 외부 카카오 지도 로드뷰를 새 탭으로 연다(API 키 불필요, 항상 동작).
+  const hasKey = Boolean((mapConfig.kakao_key || "").trim());
+  if (!hasKey) {
+    window.open(
+      `https://map.kakao.com/link/roadview/${currentWetland.lat},${currentWetland.lng}`,
+      "_blank",
+      "noopener"
+    );
+    return;
+  }
+
   const overlay = document.getElementById("roadview-overlay");
   const container = document.getElementById("roadview-container");
   document.getElementById("roadview-title").textContent = `${currentWetland.name} 로드뷰`;
@@ -1895,8 +1907,13 @@ async function openRoadview() {
   try {
     await loadKakaoSdk();
   } catch (err) {
-    showToast("로드뷰를 불러오지 못했습니다.", true);
-    console.error("카카오 SDK 로드 실패:", err);
+    // 임베드 로드뷰 실패 시 외부 로드뷰로 폴백.
+    window.open(
+      `https://map.kakao.com/link/roadview/${currentWetland.lat},${currentWetland.lng}`,
+      "_blank",
+      "noopener"
+    );
+    console.error("카카오 SDK 로드 실패 — 외부 로드뷰로 대체:", err);
     return;
   }
 
