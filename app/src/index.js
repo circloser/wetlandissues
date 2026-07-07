@@ -30,6 +30,10 @@ export default {
       return handleCollectStatus(request, env);
     }
 
+    if (url.pathname === "/api/stats" && request.method === "GET") {
+      return handleStats(request, env);
+    }
+
     const wetlandCollectMatch = url.pathname.match(/^\/api\/wetlands\/(\d+)\/collect$/);
     if (wetlandCollectMatch && request.method === "POST") {
       return handleCollectSingleWetland(request, env, wetlandCollectMatch[1]);
@@ -248,6 +252,35 @@ function parseDateRangeParams(url) {
     from: isValidDateString(fromRaw) ? fromRaw : null,
     to: isValidDateString(toRaw) ? toRaw : null,
   };
+}
+
+/**
+ * GET /api/stats
+ * 전체 뉴스 현황 정보를 반환한다(숨김 제외, 기간 필터와 무관한 전체 통계).
+ * - total: 전체 뉴스 건수
+ * - oldest / newest: 담겨 있는 뉴스의 가장 오래된 / 가장 최신 발행일
+ * - negative: 부정보도 건수
+ */
+async function handleStats(request, env) {
+  try {
+    const row = await env.DB.prepare(
+      `SELECT COUNT(*) AS total,
+              MIN(published_at) AS oldest,
+              MAX(published_at) AS newest,
+              SUM(CASE WHEN is_negative = 1 THEN 1 ELSE 0 END) AS negative
+         FROM news_issues
+        WHERE status != 'hidden'`
+    ).first();
+
+    return json({
+      total: row ? row.total : 0,
+      oldest: row ? row.oldest : null,
+      newest: row ? row.newest : null,
+      negative: row && row.negative ? row.negative : 0,
+    });
+  } catch (err) {
+    return json({ error: "뉴스 현황 조회 중 오류가 발생했습니다.", detail: String(err) }, 500);
+  }
 }
 
 /**

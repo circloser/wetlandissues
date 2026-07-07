@@ -753,6 +753,20 @@ button, input {
   border-bottom: 1px solid var(--color-border);
 }
 
+/* 전체 뉴스 현황 인포 (건수 + 수집 기간) — 뉴스 목록 위 고정 캡션 */
+.news-info {
+  flex-shrink: 0;
+  padding: 8px 20px;
+  font-size: 0.76rem;
+  color: var(--color-text-muted);
+  background: var(--color-surface-sub);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.news-info[hidden] {
+  display: none;
+}
+
 .issue-sort-label {
   font-size: 0.78rem;
   color: var(--color-text-muted);

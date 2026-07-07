@@ -240,6 +240,48 @@ async function loadWetlands() {
   } catch (err) {
     console.error("습지 목록을 불러오는 중 오류가 발생했습니다.", err);
   }
+  // 지도 데이터가 갱신되는 시점마다 전체 뉴스 현황 인포도 함께 갱신한다.
+  loadStats();
+}
+
+/**
+ * 전체 뉴스 현황(건수 + 수집 기간)을 조회해 패널 상단 인포에 표시한다.
+ * 기간 필터와 무관한 전체(숨김 제외) 통계다.
+ */
+async function loadStats() {
+  const el = document.getElementById("news-info");
+  try {
+    const res = await fetch("/api/stats");
+    const s = await res.json();
+
+    if (!s || !s.total) {
+      el.hidden = true;
+      return;
+    }
+
+    const parts = [`전체 뉴스 ${Number(s.total).toLocaleString("ko-KR")}건`];
+    if (s.oldest && s.newest) {
+      parts.push(`${formatDotDate(s.oldest)} ~ ${formatDotDate(s.newest)}`);
+    }
+    el.textContent = parts.join("  ·  ");
+    el.hidden = false;
+  } catch (err) {
+    console.error("뉴스 현황 조회 실패:", err);
+    el.hidden = true;
+  }
+}
+
+/**
+ * "YYYY-MM-DD HH:MM:SS"(또는 "YYYY-MM-DD")를 "YYYY.M.D" 형식으로 변환한다.
+ * @param {string|null} dt
+ * @returns {string}
+ */
+function formatDotDate(dt) {
+  if (!dt) return "";
+  const datePart = String(dt).split(" ")[0];
+  const p = datePart.split("-");
+  if (p.length !== 3) return datePart;
+  return `${Number(p[0])}.${Number(p[1])}.${Number(p[2])}`;
 }
 
 /**
