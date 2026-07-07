@@ -255,22 +255,50 @@ function parseDateRangeParams(url) {
 }
 
 /**
- * GET /api/stats
- * 전체 뉴스 현황 정보를 반환한다(숨김 제외, 기간 필터와 무관한 전체 통계).
- * - total: 전체 뉴스 건수
- * - oldest / newest: 담겨 있는 뉴스의 가장 오래된 / 가장 최신 발행일
- * - negative: 부정보도 건수
+ * GET /api/stats?wetland_id=&from=&to=&negative=1
+ * 현재 보기 조건에 해당하는 뉴스 현황을 반환한다(숨김 제외).
+ * GET /api/issues와 동일한 필터(습지/기간/부정)를 받아, 화면 목록과 개수·기간이 일치한다.
+ * 파라미터가 없으면 전체 기준이 된다.
+ * - total: 조건에 맞는 뉴스 건수
+ * - oldest / newest: 그 뉴스들의 가장 오래된 / 가장 최신 발행일
+ * - negative: 그중 부정보도 건수
  */
 async function handleStats(request, env) {
   try {
+    const url = new URL(request.url);
+    const wetlandId = url.searchParams.get("wetland_id");
+    const { from, to } = parseDateRangeParams(url);
+    const negativeOnly = url.searchParams.get("negative") === "1";
+
+    const conditions = ["status != 'hidden'"];
+    const bindings = [];
+
+    if (wetlandId) {
+      conditions.push("wetland_id = ?");
+      bindings.push(wetlandId);
+    }
+    if (from) {
+      conditions.push("published_at >= ?");
+      bindings.push(`${from} 00:00:00`);
+    }
+    if (to) {
+      conditions.push("published_at <= ?");
+      bindings.push(`${to} 23:59:59`);
+    }
+    if (negativeOnly) {
+      conditions.push("is_negative = 1");
+    }
+
     const row = await env.DB.prepare(
       `SELECT COUNT(*) AS total,
               MIN(published_at) AS oldest,
               MAX(published_at) AS newest,
               SUM(CASE WHEN is_negative = 1 THEN 1 ELSE 0 END) AS negative
          FROM news_issues
-        WHERE status != 'hidden'`
-    ).first();
+        WHERE ${conditions.join(" AND ")}`
+    )
+      .bind(...bindings)
+      .first();
 
     return json({
       total: row ? row.total : 0,

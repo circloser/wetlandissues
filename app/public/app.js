@@ -250,16 +250,25 @@ async function loadWetlands() {
  */
 async function loadStats() {
   const el = document.getElementById("news-info");
+
+  // 현재 보기(습지/전체)·기간·부정 필터에 따라 라벨 앞머리를 정한다.
+  const scope = viewMode === "wetland" && currentWetland ? "이 습지 " : "";
+  const kind = negativeOnly ? "부정보도" : "뉴스";
+  const prefix = `${scope}${kind}`;
+
   try {
-    const res = await fetch("/api/stats");
+    const params = buildIssueFilterParams();
+    const qs = params.toString();
+    const res = await fetch(`/api/stats${qs ? `?${qs}` : ""}`);
     const s = await res.json();
 
     if (!s || !s.total) {
-      el.hidden = true;
+      el.textContent = `${prefix} 0건`;
+      el.hidden = false;
       return;
     }
 
-    const parts = [`전체 뉴스 ${Number(s.total).toLocaleString("ko-KR")}건`];
+    const parts = [`${prefix} ${Number(s.total).toLocaleString("ko-KR")}건`];
     if (s.oldest && s.newest) {
       parts.push(`${formatDotDate(s.oldest)} ~ ${formatDotDate(s.newest)}`);
     }
@@ -493,14 +502,8 @@ async function loadIssues() {
   const content = document.getElementById("panel-content");
   content.innerHTML = `<div class="panel-loading">뉴스를 불러오는 중...</div>`;
 
-  const params = new URLSearchParams();
-  if (viewMode === "wetland" && currentWetland) {
-    params.set("wetland_id", currentWetland.id);
-  }
+  const params = buildIssueFilterParams();
   params.set("sort", currentSort);
-  if (filterState.from) params.set("from", filterState.from);
-  if (filterState.to) params.set("to", filterState.to);
-  if (negativeOnly) params.set("negative", "1");
 
   try {
     const res = await fetch(`/api/issues?${params.toString()}`);
@@ -510,6 +513,25 @@ async function loadIssues() {
     content.querySelector(".panel-loading").textContent = "뉴스를 불러오지 못했습니다.";
     console.error("뉴스 목록을 불러오는 중 오류가 발생했습니다.", err);
   }
+
+  // 목록과 동일한 조건으로 현황 인포(개수 + 기간)도 함께 갱신한다.
+  loadStats();
+}
+
+/**
+ * 현재 보기(습지/전체)·기간·부정 필터에 해당하는 뉴스 조회 파라미터를 만든다(정렬 제외).
+ * loadIssues(목록)와 loadStats(현황 인포)가 같은 필터를 쓰도록 공용화한다.
+ * @returns {URLSearchParams}
+ */
+function buildIssueFilterParams() {
+  const params = new URLSearchParams();
+  if (viewMode === "wetland" && currentWetland) {
+    params.set("wetland_id", currentWetland.id);
+  }
+  if (filterState.from) params.set("from", filterState.from);
+  if (filterState.to) params.set("to", filterState.to);
+  if (negativeOnly) params.set("negative", "1");
+  return params;
 }
 
 /**
