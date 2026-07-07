@@ -144,7 +144,7 @@ class NoKeyError extends Error {
 
 /** 제공사별 한글 표시명(오버레이 안내 문구용). */
 function providerName(p) {
-  return { osm: "무료(OpenStreetMap)", google: "구글", naver: "네이버", kakao: "카카오" }[p] || p;
+  return { osm: "무료(OpenStreetMap)", vworld: "VWorld", google: "구글", naver: "네이버", kakao: "카카오" }[p] || p;
 }
 
 /**
@@ -174,7 +174,8 @@ init();
 function init() {
   // 어댑터 레지스트리 구성(모듈 로드 순서상 함수 정의 이후 init에서 조립).
   Adapters = {
-    osm: createOsmAdapter(),
+    osm: createLeafletAdapter("free"),
+    vworld: createLeafletAdapter("vworld"),
     google: createGoogleAdapter(),
     naver: createNaverAdapter(),
     kakao: createKakaoAdapter(),
@@ -182,7 +183,7 @@ function init() {
 
   // 저장된 제공사/지도 종류 복원(기본은 OSM/일반).
   const storedProvider = localStorage.getItem(PROVIDER_STORAGE_KEY);
-  if (["osm", "google", "naver", "kakao"].includes(storedProvider)) {
+  if (["osm", "vworld", "google", "naver", "kakao"].includes(storedProvider)) {
     State.provider = storedProvider;
   }
   const storedType = localStorage.getItem(MAP_TYPE_STORAGE_KEY);
@@ -1998,11 +1999,34 @@ function buildVworldCadastralLayer(key) {
   });
 }
 
+/**
+ * VWorld 배경지도 base 레이어(일반/위성/하이브리드)를 만든다. VWorld WMTS 타일은
+ * 웹 메르카토르(EPSG:3857)라 Leaflet에 그대로 얹혀, OSM과 동일한 군집/라벨/검색 기능을
+ * 그대로 쓴다. 반환 키는 buildFreeBaseLayers와 동일해 setMapType 로직을 공유한다.
+ * @param {string} key VWorld API 키
+ * @returns {Object<string, L.Layer>}
+ */
+function buildVworldBaseLayers(key) {
+  const attribution = "&copy; VWorld, 국토교통부";
+  const wmts = (layer, ext) =>
+    L.tileLayer(`https://api.vworld.kr/req/wmts/1.0.0/${key}/${layer}/{z}/{y}/{x}.${ext}`, {
+      maxZoom: 19,
+      attribution,
+    });
+
+  const base = wmts("Base", "png");
+  const satellite = wmts("Satellite", "jpeg");
+  // 하이브리드: 위성 위에 지명/경계(Hybrid) 라벨 오버레이를 얹어 하나의 base로 묶는다.
+  const hybrid = L.layerGroup([wmts("Satellite", "jpeg"), wmts("Hybrid", "png")]);
+
+  return { "일반 지도": base, "위성 지도": satellite, "하이브리드": hybrid };
+}
+
 /* --- OSM(Leaflet) 어댑터 ---
  * 지도 종류(일반/위성/하이브리드)는 공통 select(State.mapType)로 buildFreeBaseLayers()의
  * 3개 base 레이어 중 하나를 교체 장착한다(제공사 공통 UX). 지적편집도는 VWorld 키가 있을
  * 때만 지원되며, 현재 base 레이어 위에 WMS 필지 경계 오버레이를 얹고 벗기는 방식으로 동작한다. */
-function createOsmAdapter() {
+function createLeafletAdapter(kind) {
   /** 현재 지도에 붙어 있는 base 레이어(일반/위성/하이브리드 중 하나). */
   let activeBaseLayer = null;
   /** 지적편집도 WMS 오버레이(지연 생성, VWorld 키 있을 때만). */
@@ -2013,6 +2037,16 @@ function createOsmAdapter() {
       return !!map;
     },
     async ensureLoaded() {
+      // VWorld 제공자는 VWorld 키가 있어야 base 타일을 받을 수 있다(키 없으면 안내 오버레이).
+      let baseLayers;
+      if (kind === "vworld") {
+        const key = (mapConfig.vworld_key || "").trim();
+        if (!key) throw new NoKeyError("vworld");
+        baseLayers = buildVworldBaseLayers(key);
+      } else {
+        baseLayers = buildFreeBaseLayers();
+      }
+
       // #map 안에 깨끗한 컨테이너를 만들고 그 위에 Leaflet 지도를 생성한다.
       // 지도에 maxZoom을 직접 지정해, base 레이어 부착 타이밍과 무관하게
       // L.markerClusterGroup 생성 시 항상 maxZoom을 알 수 있게 한다
@@ -2020,7 +2054,7 @@ function createOsmAdapter() {
       const el = prepareMapContainer();
       map = L.map(el, { maxZoom: 19, minZoom: 3 }).setView(DEFAULT_MAP_CENTER, DEFAULT_MAP_ZOOM);
 
-      baseLayerMap = buildFreeBaseLayers();
+      baseLayerMap = baseLayers;
       activeBaseLayer = null;
       cadastralLayer = null;
 
@@ -2056,8 +2090,8 @@ function createOsmAdapter() {
       if (cadastralLayer && map.hasLayer(cadastralLayer)) cadastralLayer.bringToFront();
     },
     supportsCadastral() {
-      // VWorld 키가 등록돼 있을 때만 지적편집도 오버레이를 지원한다.
-      return Boolean((mapConfig.vworld_key || "").trim());
+      // VWorld 제공자는 항상, 무료(OSM)는 VWorld 키가 있을 때만 지적편집도 오버레이를 지원한다.
+      return kind === "vworld" || Boolean((mapConfig.vworld_key || "").trim());
     },
     setCadastral(on) {
       if (!map) return;
