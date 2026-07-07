@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <!-- 습지 이슈 맵 파비콘 — 앱 로고(파란 원형 + "습")와 동일한 브랜드 -->
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4a90ff"/>
+      <stop offset="1" stop-color="#2f6fe0"/>
+    </linearGradient>
+  </defs>
+  <rect x="1" y="1" width="30" height="30" rx="8" fill="url(#g)"/>
+  <text x="16" y="22.5" text-anchor="middle"
+        font-family="'Malgun Gothic','맑은 고딕','Apple SD Gothic Neo',sans-serif"
+        font-size="19" font-weight="700" fill="#ffffff">습</text>
+</svg>
