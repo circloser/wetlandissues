@@ -54,3 +54,11 @@ CREATE TABLE collect_state (
   updated_at TEXT
 );
 INSERT INTO collect_state (id) VALUES (1);
+
+-- 앱 설정 (전 직원 공유) — 지도 API 키 등을 key-value로 저장 (migrations/002-config.sql 동기화)
+-- 사용 키(최소): vworld_key(VWorld API 키), kakao_key(카카오 JavaScript 키)
+-- ※ 라이브 DB에는 이 스키마 대신 migrations/002-config.sql만 적용할 것(데이터 보존).
+CREATE TABLE IF NOT EXISTS app_config (
+  key TEXT PRIMARY KEY,
+  value TEXT
+);

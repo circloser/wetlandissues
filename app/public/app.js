@@ -103,6 +103,19 @@ const CLUSTER_DISABLE_ZOOM = 12;
 const DEFAULT_MAP_CENTER = [36.3, 127.8];
 const DEFAULT_MAP_ZOOM = 7;
 
+/**
+ * 서버(GET /api/config)에서 불러온 지도 설정. 최소 vworld_key, kakao_key 키를 쓴다.
+ * 지도 JS 키는 원래 브라우저에 노출되는 도메인 제한 키라 클라이언트 보관이 정상이다.
+ */
+let mapConfig = {};
+
+/** 지도 종류 컨트롤(L.control.layers) 인스턴스 — 키 변경 시 재구성을 위해 보관. */
+let layersControl = null;
+/** 컨트롤에 등록된 base 레이어 이름→레이어 맵(재구성 시 diff 판단용). */
+let baseLayerMap = {};
+/** 카카오 지도 SDK 로드 완료 여부(중복 로드 방지). */
+let kakaoSdkReady = false;
+
 init();
 
 function init() {
@@ -132,6 +145,11 @@ function init() {
   initDateFilter();
   initDateFilterToggle();
   initSplitHandle();
+  initMapSettingsPanel();
+  initRoadview();
+
+  // 서버에 저장된 지도 키를 불러와 VWorld 레이어/카카오 로드뷰 버튼을 초기 구성한다.
+  loadMapConfig();
 
   // 모바일에서는 습지를 선택하기 전까지 하단 시트를 숨겨둔다(데스크톱은 상시 노출).
   if (isMobileViewport()) {
@@ -146,16 +164,48 @@ function init() {
 }
 
 /**
- * 일반 지도(OSM)/위성 지도(Esri World Imagery) 두 종류의 베이스 레이어를 만들고
- * 좌상단에 펼쳐진 라디오 형태의 레이어 컨트롤을 추가한다. 마지막으로 선택한 종류는
+ * 키 불필요 기본 3종 베이스 레이어(일반 OSM / 위성 Esri / 무료 하이브리드)를 만들고
+ * 좌상단에 펼쳐진 라디오 형태의 레이어 컨트롤을 추가한다. VWorld 레이어(키 필요)는
+ * loadMapConfig 이후 rebuildBaseLayers()에서 동적으로 추가된다. 마지막으로 선택한 종류는
  * localStorage에 저장해 새로고침 후에도 유지한다.
  */
 function initBaseLayers() {
+  baseLayerMap = buildFreeBaseLayers();
+
+  const storedLayerName = localStorage.getItem(MAP_LAYER_STORAGE_KEY);
+  const initialLayer = baseLayerMap[storedLayerName] || baseLayerMap["일반 지도"];
+  initialLayer.addTo(map);
+
+  layersControl = L.control
+    .layers(baseLayerMap, null, { position: "topleft", collapsed: false })
+    .addTo(map);
+
+  map.on("baselayerchange", (event) => {
+    localStorage.setItem(MAP_LAYER_STORAGE_KEY, event.name);
+  });
+}
+
+/**
+ * 키가 필요 없는 기본 3종 베이스 레이어를 만들어 {이름: 레이어} 객체로 반환한다.
+ * - 일반 지도: OpenStreetMap
+ * - 위성 지도: Esri World Imagery
+ * - 하이브리드: Esri 위성 + ArcGIS 라벨/경계 오버레이(layerGroup으로 하나의 base처럼 동작)
+ * @returns {Object<string, L.Layer>}
+ */
+function buildFreeBaseLayers() {
   const osmLayer = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
     maxZoom: 19,
     attribution:
       '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors',
   });
+
+  const esriImagery = L.tileLayer(
+    "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+    {
+      maxZoom: 19,
+      attribution: "Tiles &copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics",
+    }
+  );
 
   const satelliteLayer = L.tileLayer(
     "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
@@ -165,22 +215,103 @@ function initBaseLayers() {
     }
   );
 
-  const baseLayers = {
+  // 하이브리드: 위성 위에 지명/경계 라벨 오버레이를 얹어 하나의 base 레이어로 묶는다.
+  const boundariesOverlay = L.tileLayer(
+    "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}",
+    {
+      maxZoom: 19,
+      attribution: "Labels &copy; Esri",
+    }
+  );
+  const hybridLayer = L.layerGroup([esriImagery, boundariesOverlay]);
+
+  return {
     "일반 지도": osmLayer,
     "위성 지도": satelliteLayer,
+    "하이브리드": hybridLayer,
   };
+}
 
-  const storedLayerName = localStorage.getItem(MAP_LAYER_STORAGE_KEY);
-  const initialLayer = storedLayerName === "위성 지도" ? satelliteLayer : osmLayer;
-  initialLayer.addTo(map);
+/**
+ * VWorld API 키가 필요한 4종 base 레이어를 만들어 {이름: 레이어} 객체로 반환한다.
+ * - 일반(VWorld): Base 타일
+ * - 위성(VWorld): Satellite 타일
+ * - 하이브리드(VWorld): Satellite + Hybrid 라벨 오버레이(layerGroup)
+ * - 지적편집도: VWorld 일반 + 지적 필지 경계 WMS 오버레이(layerGroup)
+ * @param {string} key VWorld API 키
+ * @returns {Object<string, L.Layer>}
+ */
+function buildVworldBaseLayers(key) {
+  const attribution = "&copy; VWorld, 국토교통부";
 
-  L.control
-    .layers(baseLayers, null, { position: "topleft", collapsed: false })
-    .addTo(map);
+  const vworldBase = L.tileLayer(
+    `https://api.vworld.kr/req/wmts/1.0.0/${key}/Base/{z}/{y}/{x}.png`,
+    { maxZoom: 19, attribution }
+  );
+  const vworldSatellite = L.tileLayer(
+    `https://api.vworld.kr/req/wmts/1.0.0/${key}/Satellite/{z}/{y}/{x}.jpeg`,
+    { maxZoom: 19, attribution }
+  );
+  const vworldHybridOverlay = L.tileLayer(
+    `https://api.vworld.kr/req/wmts/1.0.0/${key}/Hybrid/{z}/{y}/{x}.png`,
+    { maxZoom: 19, attribution }
+  );
 
-  map.on("baselayerchange", (event) => {
-    localStorage.setItem(MAP_LAYER_STORAGE_KEY, event.name);
+  // 지적편집도: VWorld 일반 지도 위에 지적 필지 경계(WMS)를 오버레이한다.
+  const cadastralBase = L.tileLayer(
+    `https://api.vworld.kr/req/wmts/1.0.0/${key}/Base/{z}/{y}/{x}.png`,
+    { maxZoom: 19, attribution }
+  );
+  const cadastralWms = L.tileLayer.wms("https://api.vworld.kr/req/wms", {
+    layers: "lp_pa_cbnd_bubun",
+    styles: "lp_pa_cbnd_bubun",
+    format: "image/png",
+    transparent: true,
+    version: "1.3.0",
+    uppercase: true,
+    key,
+    domain: window.location.origin,
+    attribution,
   });
+
+  return {
+    "일반(VWorld)": vworldBase,
+    "위성(VWorld)": vworldSatellite,
+    "하이브리드(VWorld)": L.layerGroup([vworldSatellite, vworldHybridOverlay]),
+    "지적편집도": L.layerGroup([cadastralBase, cadastralWms]),
+  };
+}
+
+/**
+ * VWorld 키 유무/변경에 맞춰 지도 종류 컨트롤을 재구성한다.
+ * 기본 3종(무료)은 항상 유지하고, vworld_key가 있으면 VWorld 4종을 추가, 없으면 제거한다.
+ * 현재 선택된 base 레이어가 제거 대상이면 "일반 지도"로 복귀시킨다.
+ */
+function rebuildBaseLayers() {
+  const freeLayers = baseLayerMap; // 기존 무료 3종은 그대로 재사용(인스턴스 유지)
+  const key = (mapConfig.vworld_key || "").trim();
+
+  // 컨트롤에서 VWorld 계열(무료 3종이 아닌 것)을 모두 제거한다.
+  for (const [name, layer] of Object.entries(baseLayerMap)) {
+    if (!["일반 지도", "위성 지도", "하이브리드"].includes(name)) {
+      layersControl.removeLayer(layer);
+      if (map.hasLayer(layer)) {
+        map.removeLayer(layer);
+        // 제거된 레이어가 활성 상태였으면 기본 지도로 복귀.
+        freeLayers["일반 지도"].addTo(map);
+        localStorage.setItem(MAP_LAYER_STORAGE_KEY, "일반 지도");
+      }
+      delete baseLayerMap[name];
+    }
+  }
+
+  if (key) {
+    const vworldLayers = buildVworldBaseLayers(key);
+    for (const [name, layer] of Object.entries(vworldLayers)) {
+      baseLayerMap[name] = layer;
+      layersControl.addBaseLayer(layer, name);
+    }
+  }
 }
 
 /**
@@ -492,6 +623,9 @@ function updatePanelHeader() {
     titleEl.textContent = "전체 최신 뉴스";
     showAllBtn.hidden = true;
   }
+
+  // 로드뷰 버튼은 카카오 키가 있고 습지 모드일 때만 노출된다(모드 전환마다 재평가).
+  updateRoadviewButtonVisibility();
 }
 
 /**
@@ -1370,6 +1504,232 @@ function applyMapRatio(ratio) {
   const sidePanel = document.getElementById("side-panel");
   const panelRatio = 1 - ratio;
   sidePanel.style.flexBasis = `${panelRatio * 100}%`;
+}
+
+/* ------------------------------------------------------------------ */
+/* 지도 설정 (서버 저장 키) · VWorld 레이어 · 카카오 로드뷰                   */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 앱 시작 시 GET /api/config로 저장된 지도 키를 불러와 mapConfig에 반영하고,
+ * VWorld 레이어/카카오 로드뷰 버튼을 초기 구성한다. 실패해도 무료 3레이어는
+ * 그대로 동작하므로 조용히 무시한다(콘솔 로그만 남김).
+ */
+async function loadMapConfig() {
+  try {
+    const res = await fetch("/api/config");
+    mapConfig = (await res.json()) || {};
+  } catch (err) {
+    console.error("지도 설정을 불러오지 못했습니다.", err);
+    mapConfig = {};
+  }
+  applyMapConfig();
+}
+
+/**
+ * 현재 mapConfig에 맞춰 지도 레이어/로드뷰 버튼/설정 패널 표시를 일괄 갱신한다.
+ * loadMapConfig(초기)와 설정 저장 후 모두 이 함수를 호출해 페이지 새로고침 없이 반영한다.
+ */
+function applyMapConfig() {
+  rebuildBaseLayers();
+  updateRoadviewButtonVisibility();
+  updateSettingsStatusLabels();
+}
+
+/**
+ * 설정 패널(⚙) 열기/닫기 및 저장 버튼 이벤트를 초기화한다.
+ */
+function initMapSettingsPanel() {
+  document.getElementById("map-settings-btn").addEventListener("click", openMapSettings);
+  document.getElementById("map-settings-close-btn").addEventListener("click", closeMapSettings);
+  document.getElementById("map-settings-overlay").addEventListener("click", (event) => {
+    // 오버레이 배경(모달 바깥) 클릭 시 닫기.
+    if (event.target === event.currentTarget) closeMapSettings();
+  });
+
+  document
+    .getElementById("settings-vworld-save-btn")
+    .addEventListener("click", () => saveConfigKey("vworld_key", "settings-vworld-key"));
+  document
+    .getElementById("settings-kakao-save-btn")
+    .addEventListener("click", () => saveConfigKey("kakao_key", "settings-kakao-key"));
+}
+
+/**
+ * 설정 패널을 연다. 현재 저장된 키를 입력칸에 채우고 저장 여부 표시를 갱신한다.
+ */
+function openMapSettings() {
+  document.getElementById("settings-vworld-key").value = mapConfig.vworld_key || "";
+  document.getElementById("settings-kakao-key").value = mapConfig.kakao_key || "";
+  updateSettingsStatusLabels();
+  document.getElementById("map-settings-overlay").hidden = false;
+}
+
+function closeMapSettings() {
+  document.getElementById("map-settings-overlay").hidden = true;
+}
+
+/**
+ * 각 키의 "설정됨/미설정" 표시를 갱신한다.
+ */
+function updateSettingsStatusLabels() {
+  setSettingsStatus("settings-vworld-status", Boolean((mapConfig.vworld_key || "").trim()));
+  setSettingsStatus("settings-kakao-status", Boolean((mapConfig.kakao_key || "").trim()));
+}
+
+/**
+ * @param {string} elementId 상태 표시 span id
+ * @param {boolean} isSet 저장 여부
+ */
+function setSettingsStatus(elementId, isSet) {
+  const el = document.getElementById(elementId);
+  el.textContent = isSet ? "설정됨" : "미설정";
+  el.classList.toggle("settings-status--on", isSet);
+}
+
+/**
+ * 입력칸 값을 PUT /api/config로 저장하고, 성공 시 mapConfig를 갱신해 레이어/버튼을
+ * 즉시 반영한다(페이지 새로고침 없음). 빈 값으로 저장하면 해당 키가 해제된다.
+ * 실패는 토스트로 안내한다.
+ * @param {string} key "vworld_key" 또는 "kakao_key"
+ * @param {string} inputId 입력칸 id
+ */
+async function saveConfigKey(key, inputId) {
+  const value = document.getElementById(inputId).value.trim();
+
+  try {
+    const res = await fetch("/api/config", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ [key]: value }),
+    });
+
+    if (!res.ok) {
+      let message = `HTTP ${res.status}`;
+      try {
+        const data = await res.json();
+        if (data && data.error) message = data.error;
+      } catch {
+        // 기본 메시지 사용
+      }
+      throw new Error(message);
+    }
+
+    mapConfig = (await res.json()) || {};
+    applyMapConfig();
+    showToast(value ? "저장했습니다." : "해제했습니다.");
+  } catch (err) {
+    showToast(`저장에 실패했습니다: ${err.message}`, true);
+  }
+}
+
+/**
+ * 로드뷰 버튼/모달 이벤트를 초기화한다.
+ */
+function initRoadview() {
+  document.getElementById("roadview-btn").addEventListener("click", openRoadview);
+  document.getElementById("roadview-close-btn").addEventListener("click", closeRoadview);
+  document.getElementById("roadview-overlay").addEventListener("click", (event) => {
+    if (event.target === event.currentTarget) closeRoadview();
+  });
+}
+
+/**
+ * 로드뷰 버튼 표시 여부를 갱신한다.
+ * - 카카오 키가 없으면 버튼 자체를 숨긴다.
+ * - 키가 있고 습지 모드(currentWetland 존재)면 표시, 전체 모드면 숨긴다.
+ */
+function updateRoadviewButtonVisibility() {
+  const btn = document.getElementById("roadview-btn");
+  const hasKey = Boolean((mapConfig.kakao_key || "").trim());
+  btn.hidden = !(hasKey && viewMode === "wetland" && currentWetland);
+}
+
+/**
+ * 카카오 지도 SDK를 키가 있을 때만 동적으로 로드한다(이미 로드됐으면 재로드 금지).
+ * @returns {Promise<void>} kakao.maps 준비 완료 시 resolve
+ */
+function loadKakaoSdk() {
+  return new Promise((resolve, reject) => {
+    if (kakaoSdkReady && window.kakao && window.kakao.maps) {
+      resolve();
+      return;
+    }
+
+    const key = (mapConfig.kakao_key || "").trim();
+    if (!key) {
+      reject(new Error("카카오 키가 설정되지 않았습니다."));
+      return;
+    }
+
+    // 이미 스크립트 태그가 있으면(이전 로드 시도) 새로 추가하지 않고 load만 재호출.
+    if (window.kakao && window.kakao.maps && typeof window.kakao.maps.load === "function") {
+      window.kakao.maps.load(() => {
+        kakaoSdkReady = true;
+        resolve();
+      });
+      return;
+    }
+
+    const script = document.createElement("script");
+    script.src = `//dapi.kakao.com/v2/maps/sdk.js?appkey=${encodeURIComponent(key)}&libraries=&autoload=false`;
+    script.onload = () => {
+      window.kakao.maps.load(() => {
+        kakaoSdkReady = true;
+        resolve();
+      });
+    };
+    script.onerror = () => reject(new Error("카카오 SDK 로드에 실패했습니다."));
+    document.head.appendChild(script);
+  });
+}
+
+/**
+ * [로드뷰] 버튼 클릭 핸들러: 현재 선택된 습지 위치의 가장 가까운 파노라마를 조회해
+ * 모달에 표시한다. 파노라마가 없으면 안내 후 모달을 닫는다. 전체 모드(currentWetland
+ * 없음)면 아무것도 하지 않는다(버튼도 숨겨져 있음).
+ */
+async function openRoadview() {
+  if (!currentWetland) return;
+
+  const overlay = document.getElementById("roadview-overlay");
+  const container = document.getElementById("roadview-container");
+  document.getElementById("roadview-title").textContent = `${currentWetland.name} 로드뷰`;
+
+  try {
+    await loadKakaoSdk();
+  } catch (err) {
+    showToast("로드뷰를 불러오지 못했습니다.", true);
+    console.error("카카오 SDK 로드 실패:", err);
+    return;
+  }
+
+  overlay.hidden = false;
+  container.innerHTML = "";
+
+  const position = new window.kakao.maps.LatLng(currentWetland.lat, currentWetland.lng);
+  const roadview = new window.kakao.maps.Roadview(container);
+  const roadviewClient = new window.kakao.maps.RoadviewClient();
+
+  // 가장 가까운 파노라마를 반경 50m 내에서 찾는다.
+  roadviewClient.getNearestPanoId(position, 50, (panoId) => {
+    if (panoId === null) {
+      closeRoadview();
+      showToast("이 위치는 로드뷰가 제공되지 않습니다.");
+      return;
+    }
+    roadview.setPanoId(panoId, position);
+    // 모달이 표시된 뒤 컨테이너 크기를 인식하도록 릴레이아웃.
+    window.kakao.maps.event.addListener(roadview, "init", () => {
+      roadview.relayout();
+    });
+  });
+}
+
+function closeRoadview() {
+  const overlay = document.getElementById("roadview-overlay");
+  overlay.hidden = true;
+  document.getElementById("roadview-container").innerHTML = "";
 }
 
 /**

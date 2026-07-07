@@ -59,6 +59,9 @@
     </div>
 
     <span id="collect-freshness" class="collect-freshness" hidden></span>
+    <button id="map-settings-btn" class="map-settings-btn" type="button" aria-label="지도 설정" title="지도 설정">
+      <span aria-hidden="true">⚙</span>
+    </button>
     <button id="collect-btn" class="collect-btn" type="button">
       <span id="collect-btn-label">뉴스 수집</span>
       <span id="collect-spinner" class="spinner" hidden></span>
@@ -80,6 +83,7 @@
           <span class="spinner spinner--sub" aria-hidden="true"></span>
           <span>최신 뉴스 확인 중...</span>
         </span>
+        <button id="roadview-btn" class="roadview-btn" type="button" hidden>로드뷰</button>
         <button id="panel-show-all-btn" class="panel-show-all-btn" type="button" hidden>전체 보기</button>
         <button id="panel-close-btn" class="panel-close-btn" type="button" aria-label="닫기">&times;</button>
       </div>
@@ -102,6 +106,62 @@
       </div>
     </aside>
   </main>
+
+  <!-- 지도 설정 패널 (⚙) — VWorld / 카카오 키 입력 후 저장 -->
+  <div id="map-settings-overlay" class="modal-overlay" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="map-settings-title">
+      <div class="modal-header">
+        <h2 id="map-settings-title" class="modal-title">지도 설정</h2>
+        <button id="map-settings-close-btn" class="modal-close-btn" type="button" aria-label="닫기">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="settings-field">
+          <label class="settings-label" for="settings-vworld-key">
+            VWorld API 키
+            <span id="settings-vworld-status" class="settings-status"></span>
+          </label>
+          <input
+            id="settings-vworld-key"
+            class="settings-input"
+            type="text"
+            maxlength="200"
+            autocomplete="off"
+            placeholder="VWorld 키 입력"
+          />
+          <p class="settings-hint">VWorld: vworld.kr에서 무료 발급 후 도메인 등록</p>
+          <button id="settings-vworld-save-btn" class="settings-save-btn" type="button">저장</button>
+        </div>
+
+        <div class="settings-field">
+          <label class="settings-label" for="settings-kakao-key">
+            카카오 JavaScript 키
+            <span id="settings-kakao-status" class="settings-status"></span>
+          </label>
+          <input
+            id="settings-kakao-key"
+            class="settings-input"
+            type="text"
+            maxlength="200"
+            autocomplete="off"
+            placeholder="카카오 JavaScript 키 입력"
+          />
+          <p class="settings-hint">카카오: developers.kakao.com JavaScript 키, 사이트 도메인 등록</p>
+          <button id="settings-kakao-save-btn" class="settings-save-btn" type="button">저장</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 카카오 로드뷰 모달 -->
+  <div id="roadview-overlay" class="modal-overlay" hidden>
+    <div class="modal modal--roadview" role="dialog" aria-modal="true" aria-label="로드뷰">
+      <div class="modal-header">
+        <h2 class="modal-title" id="roadview-title">로드뷰</h2>
+        <button id="roadview-close-btn" class="modal-close-btn" type="button" aria-label="닫기">&times;</button>
+      </div>
+      <div id="roadview-container" class="roadview-container"></div>
+    </div>
+  </div>
 
   <script src="/vendor/leaflet/leaflet.js"></script>
   <script src="/vendor/leaflet.markercluster/leaflet.markercluster.js"></script>

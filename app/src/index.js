@@ -34,6 +34,14 @@ export default {
       return handleStats(request, env);
     }
 
+    if (url.pathname === "/api/config" && request.method === "GET") {
+      return handleGetConfig(request, env);
+    }
+
+    if (url.pathname === "/api/config" && request.method === "PUT") {
+      return handlePutConfig(request, env);
+    }
+
     const wetlandCollectMatch = url.pathname.match(/^\/api\/wetlands\/(\d+)\/collect$/);
     if (wetlandCollectMatch && request.method === "POST") {
       return handleCollectSingleWetland(request, env, wetlandCollectMatch[1]);
@@ -308,6 +316,77 @@ async function handleStats(request, env) {
     });
   } catch (err) {
     return json({ error: "뉴스 현황 조회 중 오류가 발생했습니다.", detail: String(err) }, 500);
+  }
+}
+
+/** 서버 저장 설정으로 허용하는 키 목록(화이트리스트). 그 외 키는 저장/반환하지 않는다. */
+const CONFIG_ALLOWED_KEYS = ["vworld_key", "kakao_key"];
+/** 설정 값 최대 길이(문자열, 200자 이하). */
+const CONFIG_MAX_VALUE_LEN = 200;
+
+/**
+ * GET /api/config
+ * app_config 전체를 {key: value} 객체로 반환한다(행이 없으면 {}).
+ * 지도 JS 키는 원래 브라우저에 노출되는 도메인 제한 키라 클라이언트 전달이 정상이다.
+ */
+async function handleGetConfig(request, env) {
+  try {
+    const { results } = await env.DB.prepare("SELECT key, value FROM app_config").all();
+    const config = {};
+    for (const row of results || []) {
+      config[row.key] = row.value;
+    }
+    return json(config);
+  } catch (err) {
+    return json({ error: "설정 조회 중 오류가 발생했습니다.", detail: String(err) }, 500);
+  }
+}
+
+/**
+ * PUT /api/config
+ * body: { vworld_key?, kakao_key? } 를 INSERT OR REPLACE로 저장한다.
+ * 값이 빈 문자열이면 해당 키를 삭제한다. 값 검증: 문자열이면서 길이 200자 이하.
+ * 저장 후 갱신된 전체 config를 반환한다(GET /api/config와 동일 형식).
+ */
+async function handlePutConfig(request, env) {
+  try {
+    let body;
+    try {
+      body = await request.json();
+    } catch {
+      return json({ error: "요청 본문이 올바른 JSON이 아닙니다." }, 400);
+    }
+
+    const statements = [];
+    for (const key of CONFIG_ALLOWED_KEYS) {
+      if (!(key in (body || {}))) continue;
+
+      const value = body[key];
+      if (typeof value !== "string") {
+        return json({ error: `${key} 값은 문자열이어야 합니다.` }, 400);
+      }
+      if (value.length > CONFIG_MAX_VALUE_LEN) {
+        return json({ error: `${key} 값은 ${CONFIG_MAX_VALUE_LEN}자 이하여야 합니다.` }, 400);
+      }
+
+      const trimmed = value.trim();
+      if (trimmed === "") {
+        // 빈 값은 해제로 간주 — 해당 키를 삭제한다.
+        statements.push(env.DB.prepare("DELETE FROM app_config WHERE key = ?").bind(key));
+      } else {
+        statements.push(
+          env.DB.prepare("INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)").bind(key, trimmed)
+        );
+      }
+    }
+
+    if (statements.length > 0) {
+      await env.DB.batch(statements);
+    }
+
+    return handleGetConfig(request, env);
+  } catch (err) {
+    return json({ error: "설정 저장 중 오류가 발생했습니다.", detail: String(err) }, 500);
   }
 }
 

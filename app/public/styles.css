@@ -996,6 +996,218 @@ button, input {
   background: var(--color-danger);
 }
 
+/* ------------------------------------------------------------------ */
+/* 지도 설정 버튼(⚙) · 로드뷰 버튼                                         */
+/* ------------------------------------------------------------------ */
+
+.map-settings-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border: 1.5px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text-sub);
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s var(--ease-toss), border-color 0.15s var(--ease-toss);
+}
+
+.map-settings-btn:hover {
+  background: var(--color-surface-sub);
+  border-color: var(--color-border-strong);
+}
+
+.roadview-btn {
+  flex-shrink: 0;
+  padding: 6px 12px;
+  min-height: 30px;
+  border: 1.5px solid var(--color-primary-border);
+  border-radius: 6px;
+  background: var(--color-primary-soft);
+  color: var(--color-primary-strong);
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s var(--ease-toss);
+}
+
+.roadview-btn:hover {
+  background: var(--color-primary-soft-hover);
+}
+
+.roadview-btn[hidden] {
+  display: none;
+}
+
+/* ------------------------------------------------------------------ */
+/* 모달 (지도 설정 · 로드뷰) — 오버레이 + 중앙 카드                         */
+/* ------------------------------------------------------------------ */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(15, 23, 42, 0.45);
+  z-index: 3000;
+  animation: modal-fade 0.15s var(--ease-toss);
+}
+
+.modal-overlay[hidden] {
+  display: none;
+}
+
+@keyframes modal-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.modal {
+  width: 100%;
+  max-width: 420px;
+  max-height: 90vh;
+  overflow-y: auto;
+  background: var(--color-surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  animation: modal-pop 0.2s var(--ease-toss);
+}
+
+.modal--roadview {
+  max-width: 720px;
+}
+
+@keyframes modal-pop {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 18px 20px 12px;
+}
+
+.modal-title {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 800;
+  color: var(--color-text);
+}
+
+.modal-close-btn {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 50%;
+  background: var(--color-surface-sub);
+  color: var(--color-text-sub);
+  font-size: 1.15rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s var(--ease-toss);
+}
+
+.modal-close-btn:hover {
+  background: var(--color-border);
+}
+
+.modal-body {
+  padding: 4px 20px 20px;
+}
+
+/* 설정 입력 필드 */
+.settings-field {
+  padding: 14px 0;
+  border-top: 1px solid var(--color-border);
+}
+
+.settings-field:first-child {
+  border-top: none;
+}
+
+.settings-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--color-text);
+  margin-bottom: 8px;
+}
+
+.settings-status {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+.settings-status--on {
+  color: var(--color-success-text);
+}
+
+.settings-input {
+  width: 100%;
+  padding: 9px 12px;
+  border: 1.5px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  font-size: 0.85rem;
+  color: var(--color-text);
+  background: var(--color-surface-sub);
+  transition: border-color 0.15s var(--ease-toss), background 0.15s var(--ease-toss);
+}
+
+.settings-input:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  background: var(--color-surface);
+}
+
+.settings-hint {
+  margin: 6px 0 10px;
+  font-size: 0.74rem;
+  color: var(--color-text-muted);
+  line-height: 1.4;
+}
+
+.settings-save-btn {
+  padding: 8px 16px;
+  min-height: 36px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--color-primary);
+  color: #ffffff;
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s var(--ease-toss);
+}
+
+.settings-save-btn:hover {
+  background: var(--color-primary-strong);
+}
+
+/* 로드뷰 컨테이너 — 카카오 Roadview가 그려지는 영역 */
+.roadview-container {
+  width: 100%;
+  height: 60vh;
+  min-height: 320px;
+  max-height: 520px;
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+  overflow: hidden;
+  background: var(--color-surface-sub);
+}
+
 /* ==================================================================== */
 /* 모바일 반응형 (~480px)                                                 */
 /* ==================================================================== */
