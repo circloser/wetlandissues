@@ -83,14 +83,42 @@
     <div id="map-pane" class="map-pane">
       <div id="map"></div>
 
-      <!-- 제공사 공통 지도 컨트롤(우상단): 지도 종류 + 지적편집도 토글. -->
+      <!-- 지도 컨트롤(우상단): geophoto 스타일 "🗺 지도 ▾" 드롭다운 하나로 통합
+           (지도 제공자 / 지도 종류 / 지적편집도 토글 / API 키 설정 링크). -->
       <div id="map-controls" class="map-controls">
-        <select id="map-type-select" class="map-type-select" aria-label="지도 종류">
-          <option value="roadmap">일반</option>
-          <option value="satellite">위성</option>
-          <option value="hybrid">하이브리드</option>
-        </select>
-        <button id="cadastral-btn" class="cadastral-btn" type="button" aria-pressed="false" hidden>지적편집도</button>
+        <div id="map-dd" class="map-dd">
+          <button id="map-dd-btn" class="map-dd-btn" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="map-dd-panel">
+            <span aria-hidden="true">🗺</span> 지도 <span class="map-dd-caret" aria-hidden="true">▾</span>
+          </button>
+          <div id="map-dd-panel" class="map-dd-panel" role="menu" hidden>
+            <label class="map-dd-label" for="map-dd-provider-select">지도 제공자</label>
+            <select id="map-dd-provider-select" class="map-dd-select" aria-label="지도 제공자 선택">
+              <option value="osm">무료 지도 (OpenStreetMap)</option>
+              <option value="google">구글 지도</option>
+              <option value="naver">네이버 지도</option>
+              <option value="kakao">카카오 지도</option>
+            </select>
+
+            <label class="map-dd-label" for="map-type-select">지도 종류</label>
+            <select id="map-type-select" class="map-dd-select" aria-label="지도 종류">
+              <option value="roadmap">일반</option>
+              <option value="satellite">위성</option>
+              <option value="hybrid">하이브리드</option>
+            </select>
+
+            <button id="cadastral-btn" class="map-dd-item" type="button" aria-pressed="false" disabled title="지적편집도 (네이버/카카오/OSM+VWorld 키 전용)">
+              <span aria-hidden="true">🗺</span>
+              <span class="map-dd-item-label">지적편집도</span>
+              <span id="cadastral-state" class="map-dd-state">OFF</span>
+            </button>
+
+            <div class="map-dd-sep" role="separator"></div>
+
+            <button id="map-dd-settings-btn" class="map-dd-link" type="button">
+              <span aria-hidden="true">⚙</span> API 키 설정
+            </button>
+          </div>
+        </div>
       </div>
 
       <!-- 키 없는 제공사 선택 시 지도 위에 표시하는 안내 오버레이(앱은 죽지 않음). -->
@@ -139,16 +167,10 @@
         <button id="map-settings-close-btn" class="modal-close-btn" type="button" aria-label="닫기">&times;</button>
       </div>
       <div class="modal-body">
-        <div class="settings-field">
-          <label class="settings-label" for="settings-provider-select">지도 제공자</label>
-          <select id="settings-provider-select" class="settings-input" aria-label="지도 제공자 선택">
-            <option value="osm">무료 지도 (OpenStreetMap)</option>
-            <option value="google">구글 지도</option>
-            <option value="naver">네이버 지도</option>
-            <option value="kakao">카카오 지도</option>
-          </select>
-          <p class="settings-hint">무료 지도는 키가 필요 없습니다. 구글/네이버/카카오는 아래에 키를 입력하세요.</p>
-        </div>
+        <p class="settings-intro">
+          지도 제공자는 지도 위 <strong>🗺 지도</strong> 메뉴에서 선택하세요. 무료 지도(OpenStreetMap)는
+          키가 필요 없습니다. 구글/네이버/카카오를 쓰려면 아래에 키를 입력하세요.
+        </p>
 
         <div class="settings-field">
           <label class="settings-label" for="settings-vworld-key">

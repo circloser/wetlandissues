@@ -442,53 +442,177 @@ button, input {
 }
 
 /* ------------------------------------------------------------------ */
-/* 제공사 공통 지도 컨트롤(우상단): 지도 종류 select + 지적편집도 토글         */
+/* 지도 컨트롤(우상단): "🗺 지도 ▾" 드롭다운 하나로 통합                     */
+/* (지도 제공자 / 지도 종류 / 지적편집도 토글 / API 키 설정 링크)              */
 /* ------------------------------------------------------------------ */
 .map-controls {
   position: absolute;
   top: 12px;
   right: 12px;
-  z-index: 500; /* Leaflet 컨트롤(400) 위, 모달(1000) 아래 */
-  display: flex;
-  gap: 6px;
+  z-index: 500; /* Leaflet 컨트롤(400) 위, 모달(3000) 아래 */
+}
+
+.map-dd {
+  position: relative;
+}
+
+.map-dd-btn {
+  display: inline-flex;
   align-items: center;
-}
-
-.map-type-select {
-  height: 34px;
-  padding: 0 10px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md, 10px);
-  background: #ffffff;
-  color: var(--color-text);
-  font-size: 0.82rem;
-  font-weight: 600;
-  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.16);
-  cursor: pointer;
-}
-
-.cadastral-btn {
+  gap: 6px;
   height: 34px;
   padding: 0 12px;
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-md, 10px);
-  background: #ffffff;
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
   color: var(--color-text);
   font-size: 0.82rem;
   font-weight: 600;
   box-shadow: 0 1px 4px rgba(15, 23, 42, 0.16);
   cursor: pointer;
-  transition: background 0.15s var(--ease-toss, ease), color 0.15s ease;
+  transition: background 0.15s var(--ease-toss), border-color 0.15s var(--ease-toss);
 }
 
-.cadastral-btn--on {
-  background: var(--color-primary);
-  color: #ffffff;
-  border-color: var(--color-primary);
+.map-dd-btn:hover {
+  background: var(--color-surface-sub);
 }
 
-.cadastral-btn[hidden] {
+.map-dd.map-dd--open .map-dd-btn {
+  background: var(--color-primary-soft);
+  border-color: var(--color-primary-border);
+  color: var(--color-primary-strong);
+}
+
+.map-dd-caret {
+  font-size: 0.6rem;
+  color: var(--color-text-faint);
+}
+
+/* 드롭다운 패널 — display:flex는 패널 자체에 두어 [hidden]이 항상 이긴다 */
+.map-dd-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  width: 240px;
+  max-width: calc(100vw - 24px);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 600;
+  animation: modal-fade 0.12s var(--ease-toss);
+}
+
+.map-dd-panel[hidden] {
   display: none;
+}
+
+.map-dd-label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--color-text-faint);
+  margin: 2px 2px -2px;
+}
+
+.map-dd-select {
+  width: 100%;
+  height: 36px;
+  padding: 0 10px;
+  border: 1.5px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  font-size: 0.82rem;
+  color: var(--color-text);
+  background: var(--color-surface-sub);
+  cursor: pointer;
+}
+
+.map-dd-select:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  background: var(--color-surface);
+}
+
+/* 지적편집도 토글 — select 아래 "행" 형태로, 오른쪽에 ON/OFF 상태 표시 */
+.map-dd-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  min-height: 36px;
+  padding: 8px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s var(--ease-toss), border-color 0.15s var(--ease-toss);
+}
+
+.map-dd-item-label {
+  flex: 1;
+  min-width: 0;
+}
+
+.map-dd-item:hover:not(:disabled) {
+  background: var(--color-surface-sub);
+}
+
+.map-dd-item:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.map-dd-state {
+  flex-shrink: 0;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--color-text-faint);
+}
+
+.map-dd-item--on {
+  background: var(--color-primary-soft);
+  border-color: var(--color-primary-border);
+}
+
+.map-dd-item--on .map-dd-state {
+  color: var(--color-primary-strong);
+}
+
+.map-dd-sep {
+  height: 1px;
+  background: var(--color-border);
+  margin: 2px 0;
+}
+
+/* 맨 아래 "⚙ API 키 설정" 링크 — 설정 모달을 여는 텍스트 버튼 */
+.map-dd-link {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 34px;
+  padding: 6px 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--color-text-sub);
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s var(--ease-toss);
+}
+
+.map-dd-link:hover {
+  background: var(--color-surface-sub);
 }
 
 /* 키 없는 제공사 선택 시 지도 위 안내 오버레이(앱은 죽지 않음) */
@@ -676,32 +800,6 @@ button, input {
 .wetland-cluster.wetland-cluster--negative {
   border-color: var(--color-danger);
   box-shadow: 0 2px 10px rgba(214, 69, 69, 0.34), 0 0 0 2px var(--color-danger);
-}
-
-/* ------------------------------------------------------------------ */
-/* 지도 레이어 선택 컨트롤(일반/위성) — 좌상단 펼쳐진 라디오, 토스풍 카드       */
-/* ------------------------------------------------------------------ */
-
-.leaflet-control-layers {
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-md);
-  background: var(--color-surface);
-  padding: 6px 10px;
-}
-
-.leaflet-control-layers-list label {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 2px;
-  font-size: 0.8rem;
-  font-weight: 600;
-  color: var(--color-text-sub);
-}
-
-.leaflet-control-layers-selector {
-  accent-color: var(--color-primary);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1197,6 +1295,18 @@ button, input {
   padding: 4px 20px 20px;
 }
 
+/* 설정 모달 상단 안내문 — 지도 제공자는 이제 "🗺 지도" 드롭다운에서 고른다는 안내 */
+.settings-intro {
+  margin: 0 0 4px;
+  font-size: 0.8rem;
+  line-height: 1.55;
+  color: var(--color-text-sub);
+}
+
+.settings-intro strong {
+  color: var(--color-text);
+}
+
 /* 설정 입력 필드 */
 .settings-field {
   padding: 14px 0;
@@ -1461,6 +1571,26 @@ button, input {
   .collect-btn,
   .date-filter-toggle-btn {
     min-height: 40px;
+  }
+
+  /* "🗺 지도" 드롭다운 — 터치 타깃 확보 + 좁은 화면에서 패널이 잘리지 않도록 폭 보정 */
+  .map-controls {
+    top: 8px;
+    right: 8px;
+  }
+
+  .map-dd-btn {
+    min-height: 40px;
+  }
+
+  .map-dd-panel {
+    width: min(240px, calc(100vw - 16px));
+  }
+
+  .map-dd-select,
+  .map-dd-item,
+  .map-dd-link {
+    min-height: 44px;
   }
 }
 

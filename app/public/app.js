@@ -93,9 +93,6 @@ const COLLECT_SINGLE_COOLDOWN_MS = 10 * 60 * 1000; // 10분
 /* 지도 레이어 (일반/위성) 및 마커 클러스터링 관련 상수                        */
 /* ------------------------------------------------------------------ */
 
-/** 선택한 지도 종류(base layer)를 저장하는 localStorage 키. */
-const MAP_LAYER_STORAGE_KEY = "wetland-map-base-layer";
-
 /** 클러스터를 풀고 개별 마커를 보여줄 최소 줌 레벨(습지 검색 선택 시 이 값 이상으로 flyTo). */
 const CLUSTER_DISABLE_ZOOM = 12;
 
@@ -109,9 +106,7 @@ const DEFAULT_MAP_ZOOM = 7;
  */
 let mapConfig = {};
 
-/** 지도 종류 컨트롤(L.control.layers) 인스턴스 — 키 변경 시 재구성을 위해 보관. */
-let layersControl = null;
-/** 컨트롤에 등록된 base 레이어 이름→레이어 맵(재구성 시 diff 판단용). */
+/** OSM 어댑터의 base 레이어 이름→레이어 맵({@link buildFreeBaseLayers} 결과, ensureLoaded에서 채움). */
 let baseLayerMap = {};
 /** 카카오 지도 SDK 로드 완료 여부(중복 로드 방지). */
 let kakaoSdkReady = false;
@@ -208,7 +203,7 @@ function init() {
   initDateFilterToggle();
   initSplitHandle();
   initMapSettingsPanel();
-  initMapControls();
+  initMapDropdown();
   initRoadview();
 
   // 서버에 저장된 지도 키를 불러와 VWorld 레이어/카카오 로드뷰 버튼/제공사 렌더를 초기 구성한다.
@@ -291,29 +286,8 @@ function hideMapOverlay() {
 }
 
 /**
- * 키 불필요 기본 3종 베이스 레이어(일반 OSM / 위성 Esri / 무료 하이브리드)를 만들고
- * 좌상단에 펼쳐진 라디오 형태의 레이어 컨트롤을 추가한다. VWorld 레이어(키 필요)는
- * loadMapConfig 이후 rebuildBaseLayers()에서 동적으로 추가된다. 마지막으로 선택한 종류는
- * localStorage에 저장해 새로고침 후에도 유지한다.
- */
-function initBaseLayers() {
-  baseLayerMap = buildFreeBaseLayers();
-
-  const storedLayerName = localStorage.getItem(MAP_LAYER_STORAGE_KEY);
-  const initialLayer = baseLayerMap[storedLayerName] || baseLayerMap["일반 지도"];
-  initialLayer.addTo(map);
-
-  layersControl = L.control
-    .layers(baseLayerMap, null, { position: "topleft", collapsed: false })
-    .addTo(map);
-
-  map.on("baselayerchange", (event) => {
-    localStorage.setItem(MAP_LAYER_STORAGE_KEY, event.name);
-  });
-}
-
-/**
  * 키가 필요 없는 기본 3종 베이스 레이어를 만들어 {이름: 레이어} 객체로 반환한다.
+ * OSM 어댑터가 공통 "지도 종류" select(State.mapType)에 맞춰 이 중 하나를 교체 장착한다.
  * - 일반 지도: OpenStreetMap
  * - 위성 지도: Esri World Imagery
  * - 하이브리드: Esri 위성 + ArcGIS 라벨/경계 오버레이(layerGroup으로 하나의 base처럼 동작)
@@ -357,88 +331,6 @@ function buildFreeBaseLayers() {
     "위성 지도": satelliteLayer,
     "하이브리드": hybridLayer,
   };
-}
-
-/**
- * VWorld API 키가 필요한 4종 base 레이어를 만들어 {이름: 레이어} 객체로 반환한다.
- * - 일반(VWorld): Base 타일
- * - 위성(VWorld): Satellite 타일
- * - 하이브리드(VWorld): Satellite + Hybrid 라벨 오버레이(layerGroup)
- * - 지적편집도: VWorld 일반 + 지적 필지 경계 WMS 오버레이(layerGroup)
- * @param {string} key VWorld API 키
- * @returns {Object<string, L.Layer>}
- */
-function buildVworldBaseLayers(key) {
-  const attribution = "&copy; VWorld, 국토교통부";
-
-  const vworldBase = L.tileLayer(
-    `https://api.vworld.kr/req/wmts/1.0.0/${key}/Base/{z}/{y}/{x}.png`,
-    { maxZoom: 19, attribution }
-  );
-  const vworldSatellite = L.tileLayer(
-    `https://api.vworld.kr/req/wmts/1.0.0/${key}/Satellite/{z}/{y}/{x}.jpeg`,
-    { maxZoom: 19, attribution }
-  );
-  const vworldHybridOverlay = L.tileLayer(
-    `https://api.vworld.kr/req/wmts/1.0.0/${key}/Hybrid/{z}/{y}/{x}.png`,
-    { maxZoom: 19, attribution }
-  );
-
-  // 지적편집도: VWorld 일반 지도 위에 지적 필지 경계(WMS)를 오버레이한다.
-  const cadastralBase = L.tileLayer(
-    `https://api.vworld.kr/req/wmts/1.0.0/${key}/Base/{z}/{y}/{x}.png`,
-    { maxZoom: 19, attribution }
-  );
-  const cadastralWms = L.tileLayer.wms("https://api.vworld.kr/req/wms", {
-    layers: "lp_pa_cbnd_bubun",
-    styles: "lp_pa_cbnd_bubun",
-    format: "image/png",
-    transparent: true,
-    version: "1.3.0",
-    uppercase: true,
-    key,
-    domain: window.location.origin,
-    attribution,
-  });
-
-  return {
-    "일반(VWorld)": vworldBase,
-    "위성(VWorld)": vworldSatellite,
-    "하이브리드(VWorld)": L.layerGroup([vworldSatellite, vworldHybridOverlay]),
-    "지적편집도": L.layerGroup([cadastralBase, cadastralWms]),
-  };
-}
-
-/**
- * VWorld 키 유무/변경에 맞춰 지도 종류 컨트롤을 재구성한다.
- * 기본 3종(무료)은 항상 유지하고, vworld_key가 있으면 VWorld 4종을 추가, 없으면 제거한다.
- * 현재 선택된 base 레이어가 제거 대상이면 "일반 지도"로 복귀시킨다.
- */
-function rebuildBaseLayers() {
-  const freeLayers = baseLayerMap; // 기존 무료 3종은 그대로 재사용(인스턴스 유지)
-  const key = (mapConfig.vworld_key || "").trim();
-
-  // 컨트롤에서 VWorld 계열(무료 3종이 아닌 것)을 모두 제거한다.
-  for (const [name, layer] of Object.entries(baseLayerMap)) {
-    if (!["일반 지도", "위성 지도", "하이브리드"].includes(name)) {
-      layersControl.removeLayer(layer);
-      if (map.hasLayer(layer)) {
-        map.removeLayer(layer);
-        // 제거된 레이어가 활성 상태였으면 기본 지도로 복귀.
-        freeLayers["일반 지도"].addTo(map);
-        localStorage.setItem(MAP_LAYER_STORAGE_KEY, "일반 지도");
-      }
-      delete baseLayerMap[name];
-    }
-  }
-
-  if (key) {
-    const vworldLayers = buildVworldBaseLayers(key);
-    for (const [name, layer] of Object.entries(vworldLayers)) {
-      baseLayerMap[name] = layer;
-      layersControl.addBaseLayer(layer, name);
-    }
-  }
 }
 
 /**
@@ -1681,14 +1573,12 @@ async function loadMapConfig() {
 }
 
 /**
- * 현재 mapConfig에 맞춰 지도(현재 제공사 준비/재렌더)·VWorld 레이어·로드뷰 버튼·설정 표시를
- * 일괄 갱신한다. loadMapConfig(초기)와 설정 저장 후 모두 이 함수를 호출해 새로고침 없이 반영한다.
+ * 현재 mapConfig에 맞춰 지도(현재 제공사 준비/재렌더)·로드뷰 버튼·설정 표시를 일괄 갱신한다.
+ * loadMapConfig(초기)와 설정 저장 후 모두 이 함수를 호출해 새로고침 없이 반영한다.
+ * (VWorld 키 유무는 OSM 어댑터의 supportsCadastral()이 그때그때 조회하므로 별도 레이어
+ * 재구성 없이 ensureMapReady → updateMapControls만으로 지적편집도 버튼 활성 상태가 갱신된다.)
  */
 function applyMapConfig() {
-  // OSM일 때만 VWorld 레이어 컨트롤을 재구성한다(구글/네이버/카카오는 자체 SDK 레이어 사용).
-  if (State.provider === "osm" && layersControl) {
-    rebuildBaseLayers();
-  }
   updateRoadviewButtonVisibility();
   updateSettingsStatusLabels();
   // 현재 제공사로 지도를 준비/재렌더한다(키 저장 후 즉시 반영, 초기 로드 포함).
@@ -1697,6 +1587,8 @@ function applyMapConfig() {
 
 /**
  * 설정 패널(⚙) 열기/닫기 및 저장 버튼 이벤트를 초기화한다.
+ * 지도 제공자 선택은 "🗺 지도" 드롭다운(initMapDropdown)이 정본이며, 이 모달은 API 키
+ * 입력만 담당한다.
  */
 function initMapSettingsPanel() {
   document.getElementById("map-settings-btn").addEventListener("click", openMapSettings);
@@ -1718,9 +1610,6 @@ function initMapSettingsPanel() {
   document
     .getElementById("settings-naver-save-btn")
     .addEventListener("click", () => saveConfigKey("naver_key", "settings-naver-key"));
-
-  // 지도 제공자 선택: 변경 시 즉시 전환(제공사 어댑터 로드/렌더).
-  document.getElementById("settings-provider-select").addEventListener("change", onProviderChange);
 }
 
 /**
@@ -1731,7 +1620,6 @@ function openMapSettings() {
   document.getElementById("settings-kakao-key").value = mapConfig.kakao_key || "";
   document.getElementById("settings-google-key").value = mapConfig.google_key || "";
   document.getElementById("settings-naver-key").value = mapConfig.naver_key || "";
-  document.getElementById("settings-provider-select").value = State.provider;
   updateSettingsStatusLabels();
   document.getElementById("map-settings-overlay").hidden = false;
 }
@@ -1751,11 +1639,12 @@ function updateSettingsStatusLabels() {
 }
 
 /**
- * 지도 제공자 select 변경 핸들러: 현재 view(center/zoom)를 보존하고 새 제공사로 전환한다.
- * 이전 어댑터를 reset하고 State.provider를 갱신·localStorage 저장 후 ensureMapReady로 전환.
+ * 지도 제공자 select("🗺 지도" 드롭다운) 변경 핸들러: 현재 view(center/zoom)를 보존하고
+ * 새 제공사로 전환한다. 이전 어댑터를 reset하고 State.provider를 갱신·localStorage 저장 후
+ * ensureMapReady로 전환.
  */
 async function onProviderChange() {
-  const nextProvider = document.getElementById("settings-provider-select").value;
+  const nextProvider = document.getElementById("map-dd-provider-select").value;
   if (nextProvider === State.provider) return;
 
   const prevAdapter = adapter();
@@ -1816,9 +1705,44 @@ async function saveConfigKey(key, inputId) {
 }
 
 /**
- * 제공사 공통 지도 컨트롤(지도 종류 select + 지적편집도 토글)을 초기화한다.
+ * geophoto 스타일 "🗺 지도 ▾" 드롭다운을 초기화한다. 지도 제공자 / 지도 종류 / 지적편집도
+ * 토글 / API 키 설정 링크를 하나의 패널에 모아, 열기·닫기(바깥 클릭·ESC)와 각 컨트롤의
+ * change/click 핸들러를 연결한다.
  */
-function initMapControls() {
+function initMapDropdown() {
+  const dd = document.getElementById("map-dd");
+  const btn = document.getElementById("map-dd-btn");
+  const panel = document.getElementById("map-dd-panel");
+
+  function openDd() {
+    panel.hidden = false;
+    dd.classList.add("map-dd--open");
+    btn.setAttribute("aria-expanded", "true");
+  }
+  function closeDd() {
+    panel.hidden = true;
+    dd.classList.remove("map-dd--open");
+    btn.setAttribute("aria-expanded", "false");
+  }
+
+  btn.addEventListener("click", (event) => {
+    event.stopPropagation();
+    if (panel.hidden) openDd();
+    else closeDd();
+  });
+  document.addEventListener("click", (event) => {
+    if (!panel.hidden && !dd.contains(event.target)) closeDd();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !panel.hidden) closeDd();
+  });
+
+  // 지도 제공자: 이 select가 정본(설정 모달의 옛 select는 제거됨). 변경 시 즉시 전환.
+  const providerSelect = document.getElementById("map-dd-provider-select");
+  providerSelect.value = State.provider;
+  providerSelect.addEventListener("change", onProviderChange);
+
+  // 지도 종류(모든 제공자 공통).
   const typeSelect = document.getElementById("map-type-select");
   typeSelect.value = State.mapType;
   typeSelect.addEventListener("change", () => {
@@ -1828,6 +1752,7 @@ function initMapControls() {
     if (a && a.ready) a.setMapType(State.mapType);
   });
 
+  // 지적편집도 토글(지원 제공사만 활성 — updateMapControls가 disabled 상태를 관리).
   document.getElementById("cadastral-btn").addEventListener("click", () => {
     const a = adapter();
     if (!a || !a.ready || !a.supportsCadastral()) return;
@@ -1835,21 +1760,31 @@ function initMapControls() {
     a.setCadastral(State.cadastral);
     updateMapControls();
   });
+
+  // 드롭다운 맨 아래 "⚙ API 키 설정" 링크 — 기존 설정 모달을 그대로 재사용해 연다.
+  document.getElementById("map-dd-settings-btn").addEventListener("click", () => {
+    closeDd();
+    openMapSettings();
+  });
 }
 
 /**
- * 지도 종류 select 값과 지적편집도 버튼(지원 여부/활성 상태)을 현재 State/어댑터에 맞춘다.
+ * 지도 종류 select 값과 지적편집도 버튼(지원 여부/ON·OFF 상태)을 현재 State/어댑터에 맞춘다.
  */
 function updateMapControls() {
   const typeSelect = document.getElementById("map-type-select");
   typeSelect.value = State.mapType;
 
   const btn = document.getElementById("cadastral-btn");
+  const stateLabel = document.getElementById("cadastral-state");
   const a = adapter();
   const supported = Boolean(a && a.supportsCadastral());
-  btn.hidden = !supported;
-  btn.setAttribute("aria-pressed", String(supported && State.cadastral));
-  btn.classList.toggle("cadastral-btn--on", supported && State.cadastral);
+  const on = supported && State.cadastral;
+
+  btn.disabled = !supported;
+  btn.setAttribute("aria-pressed", String(on));
+  btn.classList.toggle("map-dd-item--on", on);
+  if (stateLabel) stateLabel.textContent = on ? "ON" : "OFF";
 }
 
 /**
@@ -2043,18 +1978,57 @@ function selectNativeWetlands(wetlands) {
   return wetlands.filter((w) => (Number(w.issue_count) || 0) > 0);
 }
 
-/* --- OSM(Leaflet) 어댑터: 현재 구현을 그대로 감싼 것(동작 불변) --- */
+/**
+ * VWorld 지적편집도 WMS 오버레이 레이어를 만든다(필지 경계). OSM 어댑터가 지적편집도
+ * 토글 ON일 때 현재 base 레이어 위에 얹는다.
+ * @param {string} key VWorld API 키
+ * @returns {L.TileLayer.WMS}
+ */
+function buildVworldCadastralLayer(key) {
+  return L.tileLayer.wms("https://api.vworld.kr/req/wms", {
+    layers: "lp_pa_cbnd_bubun",
+    styles: "lp_pa_cbnd_bubun",
+    format: "image/png",
+    transparent: true,
+    version: "1.3.0",
+    uppercase: true,
+    key,
+    domain: window.location.origin,
+    attribution: "&copy; VWorld, 국토교통부",
+  });
+}
+
+/* --- OSM(Leaflet) 어댑터 ---
+ * 지도 종류(일반/위성/하이브리드)는 공통 select(State.mapType)로 buildFreeBaseLayers()의
+ * 3개 base 레이어 중 하나를 교체 장착한다(제공사 공통 UX). 지적편집도는 VWorld 키가 있을
+ * 때만 지원되며, 현재 base 레이어 위에 WMS 필지 경계 오버레이를 얹고 벗기는 방식으로 동작한다. */
 function createOsmAdapter() {
+  /** 현재 지도에 붙어 있는 base 레이어(일반/위성/하이브리드 중 하나). */
+  let activeBaseLayer = null;
+  /** 지적편집도 WMS 오버레이(지연 생성, VWorld 키 있을 때만). */
+  let cadastralLayer = null;
+
   return {
     get ready() {
       return !!map;
     },
     async ensureLoaded() {
       // #map 안에 깨끗한 컨테이너를 만들고 그 위에 Leaflet 지도를 생성한다.
+      // 지도에 maxZoom을 직접 지정해, base 레이어 부착 타이밍과 무관하게
+      // L.markerClusterGroup 생성 시 항상 maxZoom을 알 수 있게 한다
+      // ("Map has no maxZoom specified" 오류 방지).
       const el = prepareMapContainer();
-      map = L.map(el).setView(DEFAULT_MAP_CENTER, DEFAULT_MAP_ZOOM);
+      map = L.map(el, { maxZoom: 19, minZoom: 3 }).setView(DEFAULT_MAP_CENTER, DEFAULT_MAP_ZOOM);
 
-      initBaseLayers();
+      baseLayerMap = buildFreeBaseLayers();
+      activeBaseLayer = null;
+      cadastralLayer = null;
+
+      // L.markerClusterGroup은 생성 시 map.getMaxZoom()을 읽으므로, base 타일 레이어를
+      // 먼저 붙여 지도가 maxZoom을 알 수 있게 한 뒤에 클러스터 그룹을 만든다("Map has no
+      // maxZoom specified" 오류 방지). ensureMapReady가 뒤이어 setMapType을 다시 호출해도
+      // 같은 레이어면 조기 반환하므로 중복 부작용은 없다.
+      this.setMapType(State.mapType);
 
       markersLayer = L.markerClusterGroup({
         chunkedLoading: true,
@@ -2064,22 +2038,40 @@ function createOsmAdapter() {
         iconCreateFunction: buildClusterIcon,
       }).addTo(map);
 
-      // 저장된 VWorld 키가 있으면 레이어를 붙인다(컨트롤 재구성).
-      rebuildBaseLayers();
       setTimeout(() => {
         if (map) map.invalidateSize();
       }, 0);
     },
-    setMapType() {
-      // OSM은 지도 종류를 좌상단 Leaflet 레이어 컨트롤(일반/위성/하이브리드 등)로 직접 고르므로
-      // 공통 select와는 연동하지 않는다(기존 UX 그대로 유지).
+    setMapType(t) {
+      if (!map) return;
+      const layerName = { roadmap: "일반 지도", satellite: "위성 지도", hybrid: "하이브리드" }[t] || "일반 지도";
+      const nextLayer = baseLayerMap[layerName];
+      if (!nextLayer || nextLayer === activeBaseLayer) return;
+
+      if (activeBaseLayer && map.hasLayer(activeBaseLayer)) map.removeLayer(activeBaseLayer);
+      nextLayer.addTo(map);
+      activeBaseLayer = nextLayer;
+
+      // 새 base 레이어가 나중에 추가되며 지적편집도 오버레이를 덮을 수 있으므로 다시 맨 위로.
+      if (cadastralLayer && map.hasLayer(cadastralLayer)) cadastralLayer.bringToFront();
     },
     supportsCadastral() {
-      // OSM 지적편집도는 VWorld 지적편집도 레이어(키 필요)로 제공되며 레이어 컨트롤에서 선택한다.
-      // 공통 토글 버튼과는 연동하지 않으므로 false로 둔다(기존 동작 보존).
-      return false;
+      // VWorld 키가 등록돼 있을 때만 지적편집도 오버레이를 지원한다.
+      return Boolean((mapConfig.vworld_key || "").trim());
     },
-    setCadastral() {},
+    setCadastral(on) {
+      if (!map) return;
+      const key = (mapConfig.vworld_key || "").trim();
+      if (!key) return;
+
+      if (on) {
+        if (!cadastralLayer) cadastralLayer = buildVworldCadastralLayer(key);
+        if (!map.hasLayer(cadastralLayer)) cadastralLayer.addTo(map);
+        cadastralLayer.bringToFront();
+      } else if (cadastralLayer && map.hasLayer(cadastralLayer)) {
+        map.removeLayer(cadastralLayer);
+      }
+    },
     fitKorea() {
       if (map) map.flyTo(DEFAULT_MAP_CENTER, DEFAULT_MAP_ZOOM);
     },
@@ -2112,8 +2104,9 @@ function createOsmAdapter() {
       }
       map = null;
       markersLayer = null;
-      layersControl = null;
       baseLayerMap = {};
+      activeBaseLayer = null;
+      cadastralLayer = null;
       markerByWetlandId.clear();
     },
   };
