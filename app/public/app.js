@@ -2245,6 +2245,11 @@ function buildNativeBadgeEl(issueCount, negativeCount) {
   }
   el.className = "wetland-marker " + sizeClass + (negative > 0 ? " wetland-marker--negative" : "");
   el.textContent = String(count);
+  // 중요: .wetland-marker CSS는 width/height가 100%라 Leaflet divIcon(부모가 크기를 정함)에서만
+  // 제대로 보인다. 구글/네이버/카카오는 크기를 정해주는 부모가 없으므로, 여기서 명시적 픽셀
+  // 크기를 직접 지정해 배지가 찌그러지거나 엉뚱하게 배치되지 않게 한다.
+  el.style.width = size + "px";
+  el.style.height = size + "px";
   return { el, size };
 }
 
