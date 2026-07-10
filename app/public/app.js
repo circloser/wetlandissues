@@ -289,7 +289,10 @@ async function ensureMapReady(fitDefault = false) {
       );
     } else {
       console.error("지도를 준비하지 못했습니다.", err);
-      showMapOverlay("지도를 불러오지 못했습니다. API 키와 등록 도메인을 확인하세요.");
+      // 어댑터가 구체적 안내 메시지를 던졌으면 그대로 보여준다(카카오 JS 키/도메인 안내 등).
+      showMapOverlay(
+        (err && err.message) || "지도를 불러오지 못했습니다. API 키와 등록 도메인을 확인하세요."
+      );
     }
   }
 }
@@ -2917,7 +2920,34 @@ function createKakaoAdapter() {
       if (!key) throw new NoKeyError("kakao");
       if (!loaded) {
         await loadMapScript(`https://dapi.kakao.com/v2/maps/sdk.js?appkey=${encodeURIComponent(key)}&autoload=false`);
-        await new Promise((res) => kakao.maps.load(res));
+        // 잘못된 키(REST 키를 넣는 등)나 미등록 도메인이면 loader 객체 자체가 없을 수 있다.
+        if (!(window.kakao && kakao.maps && kakao.maps.load)) {
+          loaded = false;
+          throw new Error(
+            "카카오 지도 로드 실패\n" +
+              "카카오 개발자 콘솔(developers.kakao.com)에서 확인하세요:\n" +
+              "① 앱에 넣은 키가 'JavaScript 키'가 맞는지 (REST API 키 아님)\n" +
+              "② 앱 설정 › 플랫폼 › Web 사이트 도메인에 " + window.location.origin + " 이(가) 있는지"
+          );
+        }
+        // kakao.maps.load는 키/도메인이 잘못되면 콜백이 오지 않아 "불러오는 중"에서 무한 대기할
+        // 수 있으므로, 타임아웃을 둬 멈춘 것처럼 보이지 않고 명확한 안내로 실패시킨다.
+        await new Promise((res, rej) => {
+          const t = setTimeout(() => {
+            loaded = false;
+            rej(
+              new Error(
+                "카카오 지도 초기화 시간 초과\n" +
+                  "JavaScript 키가 맞는지, 그리고 앱 › 플랫폼 › Web 사이트 도메인에 " +
+                  window.location.origin + " 이(가) 등록됐는지 확인하세요."
+              )
+            );
+          }, 12000);
+          kakao.maps.load(() => {
+            clearTimeout(t);
+            res();
+          });
+        });
         loaded = true;
       }
       const el = prepareMapContainer();
