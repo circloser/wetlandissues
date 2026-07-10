@@ -2265,6 +2265,189 @@ function selectNativeWetlands(wetlands) {
 }
 
 /**
+ * native 제공사(구글/네이버/카카오) 군집 배지 HTML 엘리먼트를 만든다.
+ * buildClusterIcon(Leaflet divIcon)의 색/크기 규칙을 그대로 옮겨, 무료(OSM) 군집과
+ * 시각적으로 통일한다(.wetland-cluster 계열 CSS 재사용). 합계 issue_count를 숫자로,
+ * 합계 0이면 숫자 없는 작은 회색 점, 하위에 부정보도가 있으면 빨간 테두리로 강조한다.
+ * @param {number} totalIssue 그룹 내 issue_count 합계
+ * @param {number} totalNegative 그룹 내 negative_count 합계
+ * @param {number} count 그룹에 묶인 습지 수(현재 배지 크기엔 미반영, 시그니처 통일용)
+ * @returns {{ el: HTMLElement, size: number }}
+ */
+function buildNativeClusterEl(totalIssue, totalNegative, count) {
+  const el = document.createElement("div");
+
+  if (totalIssue === 0) {
+    // 개별 회색 마커(14px)보다 살짝 크게(18px) 하여 클러스터임을 구분한다(buildClusterIcon과 동일).
+    el.className = "wetland-cluster wetland-cluster--empty-dot";
+    el.style.width = "18px";
+    el.style.height = "18px";
+    return { el, size: 18 };
+  }
+
+  let sizeClass = "wetland-cluster--sm";
+  let size = 36;
+  if (totalIssue >= 50) {
+    sizeClass = "wetland-cluster--lg";
+    size = 52;
+  } else if (totalIssue >= 10) {
+    sizeClass = "wetland-cluster--md";
+    size = 44;
+  }
+
+  const negativeClass = totalNegative > 0 ? " wetland-cluster--negative" : "";
+  el.className = "wetland-cluster " + sizeClass + negativeClass;
+  el.textContent = String(totalIssue);
+  // .wetland-cluster CSS는 width/height가 100%라 부모가 크기를 정하는 Leaflet divIcon 전용이다.
+  // native 지도는 크기를 정해줄 부모가 없으므로 buildNativeBadgeEl과 동일하게 명시적 px를 준다.
+  el.style.width = size + "px";
+  el.style.height = size + "px";
+  return { el, size };
+}
+
+/**
+ * 화면(컨테이너) 픽셀 크기를 반환한다. 아직 레이아웃 전이면 null(호출부는 뷰포트 컬링을
+ * 건너뛰고 전부 렌더). gpsphoto mapViewport() 이식.
+ * @returns {{ w: number, h: number } | null}
+ */
+function mapViewportSize() {
+  const host = document.getElementById("map");
+  if (!host) return null;
+  const w = host.clientWidth;
+  const h = host.clientHeight;
+  return w > 0 && h > 0 ? { w, h } : null;
+}
+
+/**
+ * 화면 픽셀이 thr 이내로 가까운 지점들을 (전이적으로) 하나로 묶는다. 공간 그리드(셀=thr)로
+ * 각 점이 자기·인접 8칸만 비교해 분산 데이터에서 O(n)으로 동작한다. gpsphoto
+ * groupByPixelProximity() 이식(항목이 photo 대신 습지라 필드명만 다름).
+ * @param {Array<{ w: object, px: { x: number, y: number } }>} items
+ * @param {number} thr 픽셀 반경(이 거리 미만이면 같은 군집)
+ * @returns {Array<Array<{ w: object, px: { x: number, y: number } }>>}
+ */
+function groupWetlandsByPixel(items, thr) {
+  const n = items.length;
+  const parent = Array.from({ length: n }, (_, i) => i);
+  const find = (i) => {
+    while (parent[i] !== i) {
+      parent[i] = parent[parent[i]];
+      i = parent[i];
+    }
+    return i;
+  };
+  const uni = (i, j) => {
+    const a = find(i);
+    const b = find(j);
+    if (a !== b) parent[a] = b;
+  };
+  const thr2 = thr * thr;
+  const grid = new Map();
+  const cellOf = (it) => [Math.floor(it.px.x / thr), Math.floor(it.px.y / thr)];
+  items.forEach((it, i) => {
+    const [cx, cy] = cellOf(it);
+    const k = cx + "|" + cy;
+    (grid.get(k) || grid.set(k, []).get(k)).push(i);
+  });
+  items.forEach((it, i) => {
+    const [cx, cy] = cellOf(it);
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        const bucket = grid.get(cx + dx + "|" + (cy + dy));
+        if (!bucket) continue;
+        for (const j of bucket) {
+          if (j <= i) continue;
+          const ddx = it.px.x - items[j].px.x;
+          const ddy = it.px.y - items[j].px.y;
+          if (ddx * ddx + ddy * ddy < thr2) uni(i, j);
+        }
+      }
+    }
+  });
+  const groups = new Map();
+  items.forEach((it, i) => {
+    const r = find(i);
+    if (!groups.has(r)) groups.set(r, []);
+    groups.get(r).push(it);
+  });
+  return [...groups.values()];
+}
+
+/** 상용 지도 군집 픽셀 반경(Leaflet markerClusterGroup의 maxClusterRadius=50과 동일 톤). */
+const NATIVE_CLUSTER_RADIUS_PX = 50;
+
+/**
+ * 상용 제공사(구글/네이버/카카오) 공통 군집 렌더러. OSM/VWorld(Leaflet)와 동일한 결과
+ * (가까운 습지는 묶음 배지, 확대하면 개별로 풀림)를 화면좌표(projectPixel) 기반 군집으로
+ * 재현한다. 어댑터는 아래 인터페이스를 제공해야 한다:
+ *   ready, getView(), projectPixel(w), clearWetlands(),
+ *   _place(lat, lng, el, size, onClick), flyToWetland(w, zoom),
+ *   _wetlands(저장된 습지 배열), _onClick(습지 클릭 콜백)
+ * @param {object} a native 어댑터
+ */
+function renderNativeClustered(a) {
+  if (!a || !a.ready) return;
+  a.clearWetlands();
+
+  const wetlands = selectNativeWetlands(a._wetlands || []);
+  const onClick = a._onClick || (() => {});
+  const view = a.getView();
+  const zoom = view ? view.zoom : 0;
+
+  const vp = mapViewportSize();
+  // 뷰포트 안(+여백)만 렌더해 성능을 지킨다(gpsphoto inVP 이식). vp가 없으면 컬링을 건너뛴다.
+  const inVP = (px, pad) => !vp || (px.x >= -pad && px.x <= vp.w + pad && px.y >= -pad && px.y <= vp.h + pad);
+
+  // CLUSTER_DISABLE_ZOOM 이상에서는 군집 없이 개별 배지(무료 지도 disableClusteringAtZoom과 동일 톤).
+  if (zoom >= CLUSTER_DISABLE_ZOOM) {
+    for (const w of wetlands) {
+      if (vp && a.projectPixel) {
+        const px = a.projectPixel(w);
+        if (px && !inVP(px, 60)) continue;
+      }
+      const { el, size } = buildNativeBadgeEl(w.issue_count, w.negative_count);
+      a._place(w.lat, w.lng, el, size, () => onClick(w));
+    }
+    return;
+  }
+
+  // 군집: 화면에 보이는(뷰포트+여백) 습지만 화면좌표로 투영해 픽셀 근접끼리 묶는다.
+  const items = [];
+  for (const w of wetlands) {
+    const px = a.projectPixel ? a.projectPixel(w) : null;
+    if (!px) continue;
+    if (vp && !inVP(px, 80)) continue;
+    items.push({ w, px });
+  }
+
+  const groups = groupWetlandsByPixel(items, NATIVE_CLUSTER_RADIUS_PX);
+  for (const grp of groups) {
+    if (grp.length === 1) {
+      const w = grp[0].w;
+      const { el, size } = buildNativeBadgeEl(w.issue_count, w.negative_count);
+      a._place(w.lat, w.lng, el, size, () => onClick(w));
+      continue;
+    }
+
+    let totalIssue = 0;
+    let totalNegative = 0;
+    let latSum = 0;
+    let lngSum = 0;
+    for (const it of grp) {
+      totalIssue += Number(it.w.issue_count) || 0;
+      totalNegative += Number(it.w.negative_count) || 0;
+      latSum += it.w.lat;
+      lngSum += it.w.lng;
+    }
+    const centroid = { lat: latSum / grp.length, lng: lngSum / grp.length };
+    const { el, size } = buildNativeClusterEl(totalIssue, totalNegative, grp.length);
+    // 군집 클릭 → 그 영역으로 확대(줌+3, 최대 19)해 개별로 풀리게 한다.
+    const targetZoom = Math.min(19, Math.round(zoom) + 3);
+    a._place(centroid.lat, centroid.lng, el, size, () => a.flyToWetland(centroid, targetZoom));
+  }
+}
+
+/**
  * VWorld 지적편집도 WMS 오버레이 레이어를 만든다(필지 경계). OSM 어댑터가 지적편집도
  * 토글 ON일 때 현재 base 레이어 위에 얹는다.
  * @param {string} key VWorld API 키
@@ -2436,10 +2619,17 @@ function createGoogleAdapter() {
   let gmap = null;
   let loaded = false;
   let markers = [];
-  return {
+  // 화면좌표 투영용 영구 OverlayView(gpsphoto projHelper 이식). getProjection()으로
+  // 습지 latlng → 컨테이너 픽셀 변환에 쓴다.
+  let projHelper = null;
+  let viewCb = null;
+  let viewTimer = null;
+  const self = {
     get ready() {
       return !!gmap;
     },
+    _wetlands: [],
+    _onClick: null,
     async ensureLoaded() {
       const key = (mapConfig.google_key || "").trim();
       if (!key) throw new NoKeyError("google");
@@ -2459,6 +2649,19 @@ function createGoogleAdapter() {
         mapTypeControl: false,
         streetViewControl: false,
         fullscreenControl: false,
+      });
+      // 화면좌표 투영용 영구 오버레이. 그리기는 하지 않고 getProjection()만 쓴다.
+      projHelper = new google.maps.OverlayView();
+      projHelper.onAdd = function () {};
+      projHelper.draw = function () {};
+      projHelper.setMap(gmap);
+      // 지도 이동/줌(idle)마다 군집을 다시 계산해 화면에 맞춘다(150ms 디바운스).
+      gmap.addListener("idle", () => {
+        clearTimeout(viewTimer);
+        viewTimer = setTimeout(() => {
+          renderNativeClustered(self);
+          if (viewCb) viewCb();
+        }, 150);
       });
     },
     setMapType(t) {
@@ -2491,26 +2694,40 @@ function createGoogleAdapter() {
         gmap.setZoom(Math.round(v.zoom));
       }
     },
-    onViewChange() {},
+    onViewChange(cb) {
+      viewCb = cb;
+    },
+    projectPixel(w) {
+      if (!projHelper) return null;
+      const proj = projHelper.getProjection();
+      if (!proj) return null;
+      const p = proj.fromLatLngToContainerPixel(new google.maps.LatLng(w.lat, w.lng));
+      return p ? { x: p.x, y: p.y } : null;
+    },
+    // 배지/군집 HTML 엘리먼트 하나를 지정 좌표에 올린다(공통 군집 렌더러가 호출).
+    // 구글 기본 Marker는 임의 HTML을 못 붙이므로 OverlayView 배지로 배치한다(size 미사용).
+    _place(lat, lng, el, size, onClick) {
+      const overlay = makeGoogleHtmlMarker(gmap, { lat, lng }, el, onClick);
+      markers.push(overlay);
+    },
     clearWetlands() {
       markers.forEach((m) => m.setMap(null));
       markers = [];
     },
     renderWetlands(wetlands, onWetlandClick) {
-      this.clearWetlands();
-      for (const w of selectNativeWetlands(wetlands)) {
-        const { el } = buildNativeBadgeEl(w.issue_count, w.negative_count);
-        // 구글 AdvancedMarkerElement 없이도 동작하도록 OverlayView 대신 표준 Marker + label 사용은
-        // 스타일 제약이 있어, HTML 배지는 커스텀 오버레이로 렌더한다.
-        const overlay = makeGoogleHtmlMarker(gmap, w, el, () => onWetlandClick(w));
-        markers.push(overlay);
-      }
+      this._wetlands = wetlands || [];
+      this._onClick = onWetlandClick;
+      renderNativeClustered(self);
     },
     reset() {
       this.clearWetlands();
+      clearTimeout(viewTimer);
+      projHelper = null;
+      viewCb = null;
       gmap = null;
     },
   };
+  return self;
 }
 
 /**
@@ -2553,10 +2770,14 @@ function createNaverAdapter() {
   let loaded = false;
   let markers = [];
   let cadastralLayer = null;
-  return {
+  let viewCb = null;
+  let viewTimer = null;
+  const self = {
     get ready() {
       return !!nmap;
     },
+    _wetlands: [],
+    _onClick: null,
     async ensureLoaded() {
       const key = (mapConfig.naver_key || "").trim();
       if (!key) throw new NoKeyError("naver");
@@ -2574,6 +2795,14 @@ function createNaverAdapter() {
       nmap = new naver.maps.Map(el, {
         center: new naver.maps.LatLng(DEFAULT_MAP_CENTER[0], DEFAULT_MAP_CENTER[1]),
         zoom: DEFAULT_MAP_ZOOM,
+      });
+      // 지도 이동/줌(idle)마다 군집을 다시 계산한다(150ms 디바운스).
+      naver.maps.Event.addListener(nmap, "idle", () => {
+        clearTimeout(viewTimer);
+        viewTimer = setTimeout(() => {
+          renderNativeClustered(self);
+          if (viewCb) viewCb();
+        }, 150);
       });
     },
     setMapType(t) {
@@ -2616,31 +2845,47 @@ function createNaverAdapter() {
         nmap.setZoom(Math.round(v.zoom));
       }
     },
-    onViewChange() {},
+    onViewChange(cb) {
+      viewCb = cb;
+    },
+    projectPixel(w) {
+      try {
+        const proj = nmap.getProjection();
+        const p = proj.fromCoordToOffset(new naver.maps.LatLng(w.lat, w.lng));
+        return { x: p.x, y: p.y };
+      } catch (e) {
+        return null;
+      }
+    },
+    // 배지/군집 HTML 엘리먼트 하나를 지정 좌표에 올린다(공통 군집 렌더러가 호출).
+    _place(lat, lng, el, size, onClick) {
+      el.style.cursor = "pointer";
+      const m = new naver.maps.Marker({
+        position: new naver.maps.LatLng(lat, lng),
+        map: nmap,
+        icon: { content: el, anchor: new naver.maps.Point(size / 2, size / 2) },
+      });
+      naver.maps.Event.addListener(m, "click", onClick);
+      markers.push(m);
+    },
     clearWetlands() {
       markers.forEach((m) => m.setMap(null));
       markers = [];
     },
     renderWetlands(wetlands, onWetlandClick) {
-      this.clearWetlands();
-      for (const w of selectNativeWetlands(wetlands)) {
-        const { el, size } = buildNativeBadgeEl(w.issue_count, w.negative_count);
-        el.style.cursor = "pointer";
-        const m = new naver.maps.Marker({
-          position: new naver.maps.LatLng(w.lat, w.lng),
-          map: nmap,
-          icon: { content: el, anchor: new naver.maps.Point(size / 2, size / 2) },
-        });
-        naver.maps.Event.addListener(m, "click", () => onWetlandClick(w));
-        markers.push(m);
-      }
+      this._wetlands = wetlands || [];
+      this._onClick = onWetlandClick;
+      renderNativeClustered(self);
     },
     reset() {
       this.clearWetlands();
+      clearTimeout(viewTimer);
+      viewCb = null;
       cadastralLayer = null;
       nmap = null;
     },
   };
+  return self;
 }
 
 /* --- 카카오 어댑터 --- */
@@ -2648,10 +2893,14 @@ function createKakaoAdapter() {
   let kmap = null;
   let loaded = false;
   let markers = [];
-  return {
+  let viewCb = null;
+  let viewTimer = null;
+  const self = {
     get ready() {
       return !!kmap;
     },
+    _wetlands: [],
+    _onClick: null,
     async ensureLoaded() {
       const key = (mapConfig.kakao_key || "").trim();
       if (!key) throw new NoKeyError("kakao");
@@ -2669,6 +2918,14 @@ function createKakaoAdapter() {
       setTimeout(() => {
         if (kmap) kmap.relayout();
       }, 0);
+      // 지도 이동(idle)마다 군집을 다시 계산한다(150ms 디바운스). 카카오는 이동/줌 종료가 모두 idle.
+      kakao.maps.event.addListener(kmap, "idle", () => {
+        clearTimeout(viewTimer);
+        viewTimer = setTimeout(() => {
+          renderNativeClustered(self);
+          if (viewCb) viewCb();
+        }, 150);
+      });
     },
     setMapType(t) {
       if (!kmap) return;
@@ -2709,31 +2966,47 @@ function createKakaoAdapter() {
         kmap.setCenter(new kakao.maps.LatLng(v.lat, v.lng));
       }
     },
-    onViewChange() {},
+    onViewChange(cb) {
+      viewCb = cb;
+    },
+    projectPixel(w) {
+      try {
+        const proj = kmap.getProjection();
+        const p = proj.containerPointFromCoords(new kakao.maps.LatLng(w.lat, w.lng));
+        return { x: p.x, y: p.y };
+      } catch (e) {
+        return null;
+      }
+    },
+    // 배지/군집 HTML 엘리먼트 하나를 지정 좌표에 올린다(공통 군집 렌더러가 호출, size 미사용).
+    _place(lat, lng, el, size, onClick) {
+      el.style.cursor = "pointer";
+      el.addEventListener("click", onClick);
+      const ov = new kakao.maps.CustomOverlay({
+        position: new kakao.maps.LatLng(lat, lng),
+        content: el,
+        xAnchor: 0.5,
+        yAnchor: 0.5,
+        zIndex: 10,
+      });
+      ov.setMap(kmap);
+      markers.push(ov);
+    },
     clearWetlands() {
       markers.forEach((m) => m.setMap(null));
       markers = [];
     },
     renderWetlands(wetlands, onWetlandClick) {
-      this.clearWetlands();
-      for (const w of selectNativeWetlands(wetlands)) {
-        const { el } = buildNativeBadgeEl(w.issue_count, w.negative_count);
-        el.style.cursor = "pointer";
-        el.addEventListener("click", () => onWetlandClick(w));
-        const ov = new kakao.maps.CustomOverlay({
-          position: new kakao.maps.LatLng(w.lat, w.lng),
-          content: el,
-          xAnchor: 0.5,
-          yAnchor: 0.5,
-          zIndex: 10,
-        });
-        ov.setMap(kmap);
-        markers.push(ov);
-      }
+      this._wetlands = wetlands || [];
+      this._onClick = onWetlandClick;
+      renderNativeClustered(self);
     },
     reset() {
       this.clearWetlands();
+      clearTimeout(viewTimer);
+      viewCb = null;
       kmap = null;
     },
   };
+  return self;
 }
