@@ -820,6 +820,35 @@ button, input {
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.12);
 }
 
+/* 상용 지도(구글/네이버/카카오) 개별 습지명 라벨 — 무료·VWorld의 .wetland-label과 같은 톤.
+   Leaflet 툴팁이 없는 native 지도에서, 배지 아래(중심 기준)에 매달리도록 절대배치한다.
+   클릭을 가로막지 않도록 pointer-events:none. */
+.wetland-native-label {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 2px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.88);
+  color: var(--color-text);
+  font-size: 0.7rem;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.18);
+  pointer-events: none;
+}
+
+.wetland-native-label--muted {
+  font-size: 0.64rem;
+  font-weight: 500;
+  color: var(--color-text-muted);
+  background: rgba(255, 255, 255, 0.82);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.12);
+}
+
 /* ------------------------------------------------------------------ */
 /* 마커 클러스터 배지 — 하위 습지 issue_count 합계 표시                      */
 /* ------------------------------------------------------------------ */

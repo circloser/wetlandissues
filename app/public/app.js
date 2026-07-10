@@ -2264,6 +2264,28 @@ function buildNativeBadgeEl(issueCount, negativeCount) {
 }
 
 /**
+ * 개별(군집 안 된) 습지 배지에 습지명 라벨을 붙여 반환한다. 무료·VWorld 지도의 상시
+ * 툴팁(permanent, direction:bottom, offset[0,4])과 같은 위치·톤을 구글/네이버/카카오에서
+ * 재현한다. 라벨은 position:absolute라 배지의 중심 앵커에 영향을 주지 않고 배지 아래에
+ * 매달리며, pointer-events:none이라 다른 마커 클릭을 가로막지 않는다. 이슈 없는 회색 점은
+ * --muted로 옅게 표시해 이슈 습지와 구분한다(무료 지도와 동일).
+ * @param {object} w 습지
+ * @returns {{ el: HTMLElement, size: number }}
+ */
+function buildNativeBadgeWithLabel(w) {
+  const issueCount = Number(w.issue_count) || 0;
+  const { el, size } = buildNativeBadgeEl(issueCount, w.negative_count);
+  // 절대배치 라벨이 배지 기준으로 앵커되도록 배지를 positioned 컨테이너로 만든다
+  // (구글은 _place에서 position:absolute로 덮어써도 positioned라 동일하게 동작).
+  el.style.position = "relative";
+  const label = document.createElement("div");
+  label.className = "wetland-native-label" + (issueCount > 0 ? "" : " wetland-native-label--muted");
+  label.textContent = w.name;
+  el.appendChild(label);
+  return { el, size };
+}
+
+/**
  * native 제공사(구글/네이버/카카오)에서 렌더할 습지 목록.
  * 사용자 요청에 따라 무료 지도와 동일하게 전체 습지를 표시한다(geophoto처럼).
  * (이슈 있는 습지는 숫자 배지, 이슈 없는 습지는 회색 점.)
@@ -2419,7 +2441,7 @@ function renderNativeClustered(a) {
         const px = a.projectPixel(w);
         if (px && !inVP(px, 60)) continue;
       }
-      const { el, size } = buildNativeBadgeEl(w.issue_count, w.negative_count);
+      const { el, size } = buildNativeBadgeWithLabel(w);
       a._place(w.lat, w.lng, el, size, () => onClick(w));
     }
     return;
@@ -2438,7 +2460,7 @@ function renderNativeClustered(a) {
   for (const grp of groups) {
     if (grp.length === 1) {
       const w = grp[0].w;
-      const { el, size } = buildNativeBadgeEl(w.issue_count, w.negative_count);
+      const { el, size } = buildNativeBadgeWithLabel(w);
       a._place(w.lat, w.lng, el, size, () => onClick(w));
       continue;
     }
