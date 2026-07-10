@@ -630,6 +630,7 @@ button, input {
   font-size: 0.95rem;
   font-weight: 600;
   line-height: 1.6;
+  white-space: pre-line; /* 안내 메시지의 줄바꿈(\n)을 그대로 표시 */
 }
 
 .map-overlay[hidden] {

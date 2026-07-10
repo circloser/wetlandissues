@@ -2210,7 +2210,14 @@ function loadMapScript(src, timeoutMs = 12000) {
 window.navermap_authFailure = function () {
   try {
     if (typeof State !== "undefined" && State.provider !== "naver") return;
-    showMapOverlay("네이버 지도 인증 실패 — 키(ncpKeyId)와 등록 도메인을 확인하세요.");
+    // 비개발자도 바로 조치할 수 있게, 네이버 콘솔에 등록해야 하는 정확한 도메인을 보여준다.
+    const origin = window.location.origin;
+    showMapOverlay(
+      "네이버 지도 인증 실패\n" +
+        "네이버 클라우드 플랫폼(NCP) 콘솔 › 'Maps' 서비스에서 아래를 확인하세요:\n" +
+        "① 앱에 입력한 키가 새 Maps 서비스의 'Key ID'가 맞는지\n" +
+        "② 등록 도메인(Web 서비스 URL)에 " + origin + " 이(가) 있는지"
+    );
   } catch (e) {
     /* showMapOverlay 준비 전이면 무시 */
   }
