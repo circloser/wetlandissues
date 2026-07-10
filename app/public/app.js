@@ -2254,13 +2254,14 @@ function buildNativeBadgeEl(issueCount, negativeCount) {
 }
 
 /**
- * native 제공사에서 렌더할 습지를 추린다(사용자 합의: 상용 지도는 단순 표시).
- * issue_count>0 습지는 전부, 0건 습지는 성능/시야 정리를 위해 표시하지 않는다.
+ * native 제공사(구글/네이버/카카오)에서 렌더할 습지 목록.
+ * 사용자 요청에 따라 무료 지도와 동일하게 전체 습지를 표시한다(geophoto처럼).
+ * (이슈 있는 습지는 숫자 배지, 이슈 없는 습지는 회색 점.)
  * @param {Array<object>} wetlands
  * @returns {Array<object>}
  */
 function selectNativeWetlands(wetlands) {
-  return wetlands.filter((w) => (Number(w.issue_count) || 0) > 0);
+  return wetlands;
 }
 
 /**
