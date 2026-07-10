@@ -2319,58 +2319,62 @@ function mapViewportSize() {
 }
 
 /**
- * 화면 픽셀이 thr 이내로 가까운 지점들을 (전이적으로) 하나로 묶는다. 공간 그리드(셀=thr)로
- * 각 점이 자기·인접 8칸만 비교해 분산 데이터에서 O(n)으로 동작한다. gpsphoto
- * groupByPixelProximity() 이식(항목이 photo 대신 습지라 필드명만 다름).
+ * 화면 픽셀이 thr 이내로 가까운 습지들을 군집으로 묶는다. Leaflet.markercluster와 동일한
+ * "그리디(greedy)" 방식이다: 각 점은 이미 만들어진 군집 중심 중 반경 thr 이내에서 가장
+ * 가까운 하나에만 합류하고, 없으면 스스로 새 군집 중심이 된다.
+ *
+ * 이전 union-find(전이) 방식은 A-B가 가깝고 B-C가 가까우면 A-C가 멀어도 셋을 다 묶어,
+ * 습지 2,986곳이 촘촘한 전국 축소 화면에서 사슬처럼 전부 하나로 뭉쳐 버렸다(구글/네이버/
+ * 카카오에서 "전국이 한 덩어리"로 보이던 원인). 그리디 방식은 군집 중심끼리 항상 thr 이상
+ * 떨어져, VWorld·무료 지도(Leaflet)처럼 전국 화면에서도 지역별로 분산돼 보인다.
+ *
+ * 공간 그리드(셀=thr)에 군집 중심을 담아, 새 점은 자기·인접 8칸만 확인하므로 분산
+ * 데이터에서 사실상 O(n)으로 동작한다.
  * @param {Array<{ w: object, px: { x: number, y: number } }>} items
- * @param {number} thr 픽셀 반경(이 거리 미만이면 같은 군집)
+ * @param {number} thr 픽셀 반경(이 거리 이내면 기존 군집에 합류)
  * @returns {Array<Array<{ w: object, px: { x: number, y: number } }>>}
  */
 function groupWetlandsByPixel(items, thr) {
-  const n = items.length;
-  const parent = Array.from({ length: n }, (_, i) => i);
-  const find = (i) => {
-    while (parent[i] !== i) {
-      parent[i] = parent[parent[i]];
-      i = parent[i];
-    }
-    return i;
-  };
-  const uni = (i, j) => {
-    const a = find(i);
-    const b = find(j);
-    if (a !== b) parent[a] = b;
-  };
   const thr2 = thr * thr;
-  const grid = new Map();
-  const cellOf = (it) => [Math.floor(it.px.x / thr), Math.floor(it.px.y / thr)];
-  items.forEach((it, i) => {
-    const [cx, cy] = cellOf(it);
-    const k = cx + "|" + cy;
-    (grid.get(k) || grid.set(k, []).get(k)).push(i);
-  });
-  items.forEach((it, i) => {
-    const [cx, cy] = cellOf(it);
+  const grid = new Map(); // 셀키 → 그 셀에서 시작된 군집 중심 배열
+  const clusters = []; // { cx, cy, members: [] }
+  const cellKey = (x, y) => Math.floor(x / thr) + "|" + Math.floor(y / thr);
+  for (const it of items) {
+    const gx = Math.floor(it.px.x / thr);
+    const gy = Math.floor(it.px.y / thr);
+    // 자기·인접 8칸에서 반경 thr 이내 가장 가까운 군집 중심을 찾는다.
+    let best = null;
+    let bestD = thr2;
     for (let dx = -1; dx <= 1; dx++) {
       for (let dy = -1; dy <= 1; dy++) {
-        const bucket = grid.get(cx + dx + "|" + (cy + dy));
+        const bucket = grid.get(gx + dx + "|" + (gy + dy));
         if (!bucket) continue;
-        for (const j of bucket) {
-          if (j <= i) continue;
-          const ddx = it.px.x - items[j].px.x;
-          const ddy = it.px.y - items[j].px.y;
-          if (ddx * ddx + ddy * ddy < thr2) uni(i, j);
+        for (const c of bucket) {
+          const ddx = it.px.x - c.cx;
+          const ddy = it.px.y - c.cy;
+          const d = ddx * ddx + ddy * ddy;
+          if (d < bestD) {
+            bestD = d;
+            best = c;
+          }
         }
       }
     }
-  });
-  const groups = new Map();
-  items.forEach((it, i) => {
-    const r = find(i);
-    if (!groups.has(r)) groups.set(r, []);
-    groups.get(r).push(it);
-  });
-  return [...groups.values()];
+    if (best) {
+      best.members.push(it);
+    } else {
+      const c = { cx: it.px.x, cy: it.px.y, members: [it] };
+      clusters.push(c);
+      const k = cellKey(it.px.x, it.px.y);
+      let bucket = grid.get(k);
+      if (!bucket) {
+        bucket = [];
+        grid.set(k, bucket);
+      }
+      bucket.push(c);
+    }
+  }
+  return clusters.map((c) => c.members);
 }
 
 /** 상용 지도 군집 픽셀 반경(Leaflet markerClusterGroup의 maxClusterRadius=50과 동일 톤). */
