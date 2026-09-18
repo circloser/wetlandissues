@@ -5,7 +5,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { startCollection, collectBatch, BATCH_SIZE } from "../src/collector.js";
+import { startCollection, collectBatch, nextWetlands, chainStalled, BATCH_SIZE } from "../src/collector.js";
 
 /**
  * collect_state 1행과 wetlands 목록을 흉내 내는 최소 D1 목.
@@ -17,6 +17,7 @@ function makeMockDb({ state, wetlands }) {
     wetlands,
     batchCalls: 0,
     batchStmtCounts: [],
+    wetlandQueries: [],
   };
 
   db.prepare = (sql) => {
@@ -39,10 +40,23 @@ function makeMockDb({ state, wetlands }) {
         if (/FROM news_issues/.test(sql)) {
           return { results: [] };
         }
-        // SELECT id,name FROM wetlands ... LIMIT ? OFFSET ?
+        // 습지 조회 — 실제 SQL의 정렬(priority DESC, id)과 조건을 그대로 흉내 낸다.
+        const sorted = db.wetlands
+          .map((w) => ({ priority: 0, ...w }))
+          .sort((a, b) => b.priority - a.priority || a.id - b.id);
+        db.wetlandQueries.push(sql);
+        if (/priority = \? AND id > \?/.test(sql)) {
+          const [p, id, limit] = bound;
+          return { results: sorted.filter((w) => w.priority === p && w.id > id).slice(0, limit) };
+        }
+        if (/priority < \?/.test(sql)) {
+          const [p, limit] = bound;
+          return { results: sorted.filter((w) => w.priority < p).slice(0, limit) };
+        }
+        // 커서 키가 없을 때: ... LIMIT ? OFFSET ?
         const limit = bound[0];
         const offset = bound[1];
-        return { results: db.wetlands.slice(offset, offset + limit) };
+        return { results: sorted.slice(offset, offset + limit) };
       },
       async run() {
         // UPDATE collect_state ... — SET 절 순서대로 상태에 반영(테스트에 필요한 필드만)
@@ -55,6 +69,8 @@ function makeMockDb({ state, wetlands }) {
             db.state.collected = 0;
             db.state.running = 1;
             db.state.updated_at = bound[2];
+            db.state.cursor_priority = null;
+            db.state.cursor_id = null;
             return { meta: { changes: 1 } };
           } else if (/running = 0, updated_at/.test(sql)) {
             // 빈 배치 종료 처리
@@ -62,11 +78,12 @@ function makeMockDb({ state, wetlands }) {
             db.state.updated_at = bound[0];
             return { meta: { changes: 1 } };
           } else {
-            // 배치 전진: bind = [cursor, processed, collected, doneFlag, now, expectedCursor]
+            // 배치 전진: bind = [cursor, processed, collected, doneFlag, now,
+            //                   cursorPriority, cursorId, expectedCursor]
             // 실제 SQL: running = CASE WHEN doneFlag = 1 THEN 0 ELSE running END
             //           WHERE id = 1 AND cursor_pos = expectedCursor (낙관적 잠금)
             // 잠금 조건이 안 맞으면(다른 invocation이 먼저 전진) 아무것도 반영하지 않는다.
-            if (bound[5] !== db.state.cursor_pos) {
+            if (bound[7] !== db.state.cursor_pos) {
               return { meta: { changes: 0 } };
             }
             db.state.cursor_pos = bound[0];
@@ -76,6 +93,8 @@ function makeMockDb({ state, wetlands }) {
               db.state.running = 0;
             }
             db.state.updated_at = bound[4];
+            db.state.cursor_priority = bound[5];
+            db.state.cursor_id = bound[6];
             return { meta: { changes: 1 } };
           }
         }
@@ -227,4 +246,70 @@ test("collectBatch: 마지막 배치를 넘어 커서가 total 이상이면 done
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("nextWetlands: 커서 키로 이어 읽어도 우선순위 순서를 빠짐없이 그대로 재현한다", async () => {
+  // 우선순위가 섞인 100곳 — 같은 우선순위 안에서는 id 순.
+  const wetlands = new Array(100).fill(0).map((_, i) => ({ id: i + 1, name: `습지${i}`, priority: [3, 0, 1, 3, 0][i % 5] }));
+  const db = makeMockDb({ state: { id: 1, cursor_pos: 0, running: 1 }, wetlands });
+  const expected = [...wetlands].sort((a, b) => b.priority - a.priority || a.id - b.id).map((w) => w.id);
+  const seen = [];
+  let state = { cursor_pos: 0, cursor_priority: null, cursor_id: null };
+  for (;;) {
+    const batch = await nextWetlands({ DB: db }, state, 7);
+    if (batch.length === 0) break;
+    seen.push(...batch.map((w) => w.id));
+    const last = batch[batch.length - 1];
+    state = { cursor_pos: state.cursor_pos + batch.length, cursor_priority: last.priority, cursor_id: last.id };
+  }
+  assert.deepEqual(seen, expected);
+  // OFFSET 조회는 첫 배치 한 번뿐 — 나머지는 전부 커서 키 조회다.
+  assert.equal(db.wetlandQueries.filter((q) => /OFFSET/.test(q)).length, 1);
+});
+
+test("collectBatch: 커서 키를 저장하고, 다음 배치는 OFFSET 없이 그 뒤부터 읽는다", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(`<item><title>x - y</title><link>https://ex.com/${Math.random()}</link></item>`);
+  try {
+    const wetlands = new Array(80).fill(0).map((_, i) => ({ id: i + 1, name: `습지${i}`, priority: i < 50 ? 2 : 0 }));
+    const db = makeMockDb({
+      state: { id: 1, cursor_pos: 0, running: 1, processed: 0, total: 80, collected: 0, updated_at: "2020-01-01 00:00:00", cursor_priority: null, cursor_id: null },
+      wetlands,
+    });
+    await collectBatch({ DB: db }, BATCH_SIZE);
+    assert.equal(db.state.cursor_priority, 2);
+    assert.equal(db.state.cursor_id, 35);
+    await collectBatch({ DB: db }, BATCH_SIZE);
+    // 두 번째 배치: 우선순위 2의 나머지 15곳(36~50) + 우선순위 0의 앞 20곳(51~70).
+    assert.equal(db.state.cursor_priority, 0);
+    assert.equal(db.state.cursor_id, 70);
+    assert.equal(db.wetlandQueries.filter((q) => /OFFSET/.test(q)).length, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("collectBatch: 커서 키 도입 전에 시작된 수집은 OFFSET으로 한 번 이어받는다", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(`<item><title>x - y</title><link>https://ex.com/${Math.random()}</link></item>`);
+  try {
+    const db = makeMockDb({
+      state: { id: 1, cursor_pos: 35, running: 1, processed: 35, total: 100, collected: 0, updated_at: "2020-01-01 00:00:00" },
+      wetlands: new Array(100).fill(0).map((_, i) => ({ id: i + 1, name: `습지${i}` })),
+    });
+    await collectBatch({ DB: db }, BATCH_SIZE);
+    assert.equal(db.state.cursor_pos, 70);
+    assert.equal(db.state.cursor_id, 70);
+    assert.match(db.wetlandQueries[0], /OFFSET/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("chainStalled: 3분 넘게 진행이 없을 때만 멈춘 체인으로 본다", () => {
+  const now = Date.parse("2026-09-19T00:10:00Z");
+  assert.equal(chainStalled("2026-09-19 00:09:00", now), false);
+  assert.equal(chainStalled("2026-09-19 00:06:59", now), true);
+  assert.equal(chainStalled(null, now), true);
+  assert.equal(chainStalled("garbage", now), true);
 });

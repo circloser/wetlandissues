@@ -4,7 +4,7 @@
  * - 그 외 : 정적 자산(ASSETS)으로 폴백
  * - scheduled : 매일 뉴스 스크랩 배치 (US-002)
  */
-import { startCollection, collectBatch, collectSingleWetland } from "./collector.js";
+import { startCollection, collectBatch, collectSingleWetland, chainStalled } from "./collector.js";
 
 export default {
   async fetch(request, env, ctx) {
@@ -69,11 +69,16 @@ export default {
     // 이어지고 끊길 수 있다(로컬 dev에는 이 제한이 없어 로컬 검증만으로는 안 드러남).
     // 5분 간격 cron이 끊긴 체인을 자동 재개하므로 어떤 원인으로 끊겨도 스스로 복구된다.
     const state = await env.DB.prepare(
-      "SELECT running FROM collect_state WHERE id = 1"
+      "SELECT running, updated_at FROM collect_state WHERE id = 1"
     ).first();
 
     if (state && state.running === 1) {
-      console.log("scheduled — 진행 중인 수집 체인 재개", event.cron);
+      // 체인이 살아서 진행 중이면 그대로 둔다(체인을 겹쳐 걸면 같은 배치가 중복 실행된다).
+      if (!chainStalled(state.updated_at)) {
+        console.log("scheduled — 수집 체인 진행 중, 재개 생략", event.cron);
+        return;
+      }
+      console.log("scheduled — 멈춘 수집 체인 재개", event.cron);
       runChain(env, ctx, env.SELF_URL);
       return;
     }

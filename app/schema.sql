@@ -40,6 +40,8 @@ CREATE INDEX idx_news_issues_published_at ON news_issues(published_at);
 CREATE INDEX idx_news_issues_status ON news_issues(status);
 CREATE INDEX idx_news_issues_is_negative ON news_issues(is_negative);
 CREATE INDEX idx_wetlands_priority ON wetlands(priority);
+-- 배치 수집 커서용 (migrations/003-collect-cursor.sql 동기화)
+CREATE INDEX idx_wetlands_priority_id ON wetlands(priority DESC, id);
 
 -- 뉴스 수집 진행 상태 (배치 수집 커서/진행률 — 항상 1행만 사용)
 DROP TABLE IF EXISTS collect_state;
@@ -51,7 +53,10 @@ CREATE TABLE collect_state (
   total INTEGER NOT NULL DEFAULT 0,
   collected INTEGER NOT NULL DEFAULT 0,
   started_at TEXT,
-  updated_at TEXT
+  updated_at TEXT,
+  -- 마지막으로 처리한 습지의 (priority, id) — 다음 배치 시작점 (migrations/003)
+  cursor_priority INTEGER,
+  cursor_id INTEGER
 );
 INSERT INTO collect_state (id) VALUES (1);
 

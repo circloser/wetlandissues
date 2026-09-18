@@ -492,7 +492,8 @@ export async function startCollection(env) {
   await env.DB.prepare(
     `UPDATE collect_state
        SET cursor_pos = 0, processed = 0, collected = 0, total = ?,
-           running = 1, started_at = ?, updated_at = ?
+           running = 1, started_at = ?, updated_at = ?,
+           cursor_priority = NULL, cursor_id = NULL
      WHERE id = 1`
   )
     .bind(total, now, now)
@@ -553,6 +554,65 @@ export async function collectSingleWetland(env, wetlandId) {
 }
 
 /**
+ * 이번 배치에서 처리할 습지 batchSize개를 우선순위 순(priority DESC, id)으로 가져온다.
+ *
+ * D1은 "읽은 행 수"로 과금·제한된다(무료: 계정 전체 하루 500만 행). 예전 방식
+ * `ORDER BY priority DESC, id LIMIT ? OFFSET ?`는 id 보조 정렬 때문에 인덱스를 못 타서
+ * 배치(35곳)마다 습지 표 전체(~3,000행 × 2)를 읽었고, 하루 수백 배치가 돌며 계정 한도를
+ * 혼자 다 써 같은 계정의 다른 서비스까지 멈췄다.
+ *
+ * 그래서 커서를 "몇 번째"(OFFSET)가 아니라 "마지막으로 처리한 (priority, id)"로 둔다.
+ * 같은 우선순위의 나머지 → 더 낮은 우선순위 순서로 두 번 조회하며, 둘 다
+ * idx_wetlands_priority_id (priority DESC, id) 인덱스로 바로 찾아 배치 크기만큼만 읽는다.
+ * (migrations/003-collect-cursor.sql)
+ *
+ * 커서 키가 없으면(첫 배치, 또는 이 방식 도입 전에 시작된 수집) OFFSET으로 한 번만 읽는다.
+ * @param {*} env
+ * @param {{ cursor_pos: number, cursor_priority?: number|null, cursor_id?: number|null }} state
+ * @param {number} batchSize
+ * @returns {Promise<Array<{ id: number, name: string, priority: number }>>}
+ */
+export async function nextWetlands(env, state, batchSize) {
+  if (state.cursor_priority != null && state.cursor_id != null) {
+    const { results: same } = await env.DB.prepare(
+      "SELECT id, name, priority FROM wetlands WHERE priority = ? AND id > ? ORDER BY id LIMIT ?"
+    )
+      .bind(state.cursor_priority, state.cursor_id, batchSize)
+      .all();
+    const rows = same || [];
+    if (rows.length >= batchSize) return rows;
+    const { results: lower } = await env.DB.prepare(
+      "SELECT id, name, priority FROM wetlands WHERE priority < ? ORDER BY priority DESC, id LIMIT ?"
+    )
+      .bind(state.cursor_priority, batchSize - rows.length)
+      .all();
+    return rows.concat(lower || []);
+  }
+  const { results } = await env.DB.prepare(
+    "SELECT id, name, priority FROM wetlands ORDER BY priority DESC, id LIMIT ? OFFSET ?"
+  )
+    .bind(batchSize, state.cursor_pos)
+    .all();
+  return results || [];
+}
+
+/**
+ * 수집 체인이 멈췄는지(마지막 진행이 staleMs 이전인지) 판단한다.
+ * 5분 cron은 멈춘 체인만 이어야 한다 — 멀쩡히 도는 체인 옆에 체인을 또 걸면 같은 배치를
+ * 여러 체인이 중복 실행해 RSS 요청과 D1 읽기가 배로 늘어난다.
+ * @param {string|null|undefined} updatedAt - collect_state.updated_at ("YYYY-MM-DD HH:MM:SS", UTC)
+ * @param {number} [nowMs]
+ * @param {number} [staleMs=3분]
+ * @returns {boolean}
+ */
+export function chainStalled(updatedAt, nowMs = Date.now(), staleMs = 3 * 60 * 1000) {
+  if (!updatedAt) return true;
+  const lastMs = Date.parse(`${String(updatedAt).replace(" ", "T")}Z`);
+  if (Number.isNaN(lastMs)) return true;
+  return nowMs - lastMs >= staleMs;
+}
+
+/**
  * 배치 하나를 수집한다: collect_state 커서 위치부터 batchSize개 습지를 처리하고
  * 커서/진행률을 전진시킨다. running=0이면 아무 것도 하지 않고 done을 반환한다.
  *
@@ -571,11 +631,7 @@ export async function collectBatch(env, batchSize = BATCH_SIZE) {
     return { done: true };
   }
 
-  const { results: wetlands } = await env.DB.prepare(
-    "SELECT id, name FROM wetlands ORDER BY priority DESC, id LIMIT ? OFFSET ?"
-  )
-    .bind(batchSize, state.cursor_pos)
-    .all();
+  const wetlands = await nextWetlands(env, state, batchSize);
 
   const now = nowUtc();
 
@@ -668,14 +724,16 @@ export async function collectBatch(env, batchSize = BATCH_SIZE) {
   // WHERE cursor_pos = ? (낙관적 잠금): 브라우저 폴링·cron·체인이 동시에 배치를 돌려도
   // 같은 커서에서 시작한 배치 중 하나만 전진을 기록한다. 진 쪽의 INSERT는 OR IGNORE라
   // 무해하고, 커서가 이중 전진해 습지를 건너뛰는 것만 정확히 방지된다.
+  // 다음 배치의 시작점: 이번 배치 마지막 습지의 (priority, id).
+  const last = wetlands[wetlands.length - 1];
   const advanceResult = await env.DB.prepare(
     `UPDATE collect_state
        SET cursor_pos = ?, processed = ?, collected = ?,
            running = CASE WHEN ? = 1 THEN 0 ELSE running END,
-           updated_at = ?
+           updated_at = ?, cursor_priority = ?, cursor_id = ?
      WHERE id = 1 AND cursor_pos = ?`
   )
-    .bind(nextCursor, processed, collected, done ? 1 : 0, now, state.cursor_pos)
+    .bind(nextCursor, processed, collected, done ? 1 : 0, now, last.priority ?? 0, last.id, state.cursor_pos)
     .run();
 
   if (!advanceResult.meta || advanceResult.meta.changes === 0) {
