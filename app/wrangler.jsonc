@@ -1,7 +1,7 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   // 습지 이슈 맵퍼 Cloudflare Worker 설정
-  "name": "wetland-issues-mapper",
+  "name": "wetlandissues",
   "main": "src/index.js",
   "compatibility_date": "2026-07-05",
 
@@ -30,7 +30,7 @@
   // fetch 핸들러에서는 요청 url.origin을 우선 쓰고(로컬 dev에서도 체인 동작),
   // request가 없는 scheduled에서만 이 값을 사용한다.
   "vars": {
-    "SELF_URL": "https://wetland-issues-mapper.singlena.workers.dev"
+    "SELF_URL": "https://wetlandissues.singlena.workers.dev"
   },
 
   // 자기 자신 서비스 바인딩: 배포된 Worker는 자기 hostname으로 fetch할 수 없으므로
@@ -38,7 +38,7 @@
   "services": [
     {
       "binding": "SELF",
-      "service": "wetland-issues-mapper"
+      "service": "wetlandissues"
     }
   ],
 

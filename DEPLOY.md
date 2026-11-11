@@ -2,7 +2,7 @@
 
 이 서비스는 이미 **인터넷에 배포되어 운영 중**이에요. 아래 링크로 바로 접속하면 됩니다.
 
-**이미 배포된 서비스 주소**: https://wetland-issues-mapper.singlena.workers.dev
+**이미 배포된 서비스 주소**: https://wetlandissues.singlena.workers.dev
 
 ## 새로 다시 배포해야 할 때
 
@@ -86,7 +86,7 @@ npm run deploy
 명령 실행 결과에 아래와 같은 형식의 주소가 나와요.
 
 ```
-https://wetland-issues-mapper.<내-계정이름>.workers.dev
+https://wetlandissues.<내-계정이름>.workers.dev
 ```
 
 이 주소를 브라우저에 입력하면 지도 화면이 나와요. 이제 이 주소를 팀원들과 공유하면 누구나 로그인 없이 접속할 수 있어요.
@@ -109,7 +109,7 @@ A. 방화벽이나 보안 프로그램이 막고 있을 수 있어요. 터미널
 **Q. `database_id`를 어디에, 어떻게 넣는지 모르겠어요.**
 A. `app` 폴더 안의 `wrangler.jsonc` 파일을 텍스트 편집기로 여세요. `"database_id": "local-placeholder"` 라고 적힌 줄을 찾아서, 큰따옴표 안의 `local-placeholder` 글자만 지우고 `npx wrangler d1 create wetland-db` 실행 후 나온 긴 값으로 바꿔 넣으면 됩니다. 나머지 글자(따옴표, 쉼표 등)는 건드리지 마세요.
 
-**Q. 이미 배포된 사이트(https://wetland-issues-mapper.singlena.workers.dev)에 들어갔는데 뉴스가 적거나 없어요.**
+**Q. 이미 배포된 사이트(https://wetlandissues.singlena.workers.dev)에 들어갔는데 뉴스가 적거나 없어요.**
 A. 정상이에요. 처음에는 뉴스가 비어 있을 수 있어요. 화면 위쪽의 **[뉴스 수집]** 버튼을 한 번 눌러서 즉시 수집을 실행해 보세요. 버튼에 진행률이 표시되면서 뉴스가 채워집니다(예: "수집 중 1,234 / 2,986"). 수집이 끝날 때까지 기다릴 필요는 없어요 — 버튼을 누른 뒤 창을 닫아도 서버가 계속 진행합니다. 이후로는 매일 아침 자동으로 새로운 뉴스를 수집해요.
 
 **Q. `npm run deploy` 실행 중 데이터베이스 관련 에러가 나요.**
